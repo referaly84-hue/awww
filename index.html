@@ -1549,6 +1549,8 @@ window.openMatchScheduleModal = async function(fixtureOrId, onSaved) {
         </div>
       </div>
 
+      <div id="sched_modal_conflict" style="display:none;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;padding:8px 12px;border-radius:8px;font-size:12px;line-height:1.4;margin-bottom:12px"></div>
+
       <!-- Блок стадиона и нейтрального поля -->
       <div style="background:var(--soft);padding:10px 14px;border-radius:8px;border:1px solid var(--line);margin-bottom:14px">
         <div class="row" style="gap:10px;align-items:flex-end">
@@ -1592,14 +1594,54 @@ window.openMatchScheduleModal = async function(fixtureOrId, onSaved) {
     const stadiumInput = mEl.querySelector('#sched_modal_stadium');
     const neutralInput = mEl.querySelector('#sched_modal_neutral');
 
+    const isCupRplFx = (x) => {
+      if (!x || x.comp !== 'cup') return false;
+      if (x.cupPath === 'rpl_group' || x.cupPath === 'rpl_playoff') return true;
+      const stg = String(x.cupStage || '').toLowerCase();
+      if (stg.startsWith('rpl_playoff') || stg.startsWith('rpl_')) return true;
+      const lbl = String(x.label || '').toLowerCase();
+      return lbl.includes('путь рпл') || lbl.includes('пути рпл');
+    };
+    const updateConflictWarn = () => {
+      const box = mEl.querySelector('#sched_modal_conflict');
+      if (!box) return;
+      const allFx = S.st?.fixtures || [];
+      const isRpl = f.comp === 'rpl';
+      const isCupRpl = isCupRplFx(f);
+      if (!isRpl && !isCupRpl) { box.style.display = 'none'; return; }
+      const gd = gdInput.value.trim();
+      const rd = rdInput.value.trim();
+      const msgs = [];
+      const opps = allFx.filter(x => x.id !== f.id && (x.season === f.season || !x.season) && (isRpl ? isCupRplFx(x) : x.comp === 'rpl'));
+      if (gd && gd !== (f.gameDate || f.date) && opps.some(x => (x.gameDate || x.date) === gd)) {
+        msgs.push(isRpl
+          ? '⚠️ На выбранную игровую дату уже назначен Кубок России (Путь РПЛ). В один день может быть либо РПЛ, либо Путь РПЛ.'
+          : '⚠️ На выбранную игровую дату уже назначены матчи РПЛ. В один день может быть либо РПЛ, либо Путь РПЛ.');
+      }
+      if (rd && rd !== f.realDate && opps.some(x => x.realDate === rd)) {
+        msgs.push(isRpl
+          ? '⚠️ На выбранную реальную дату (МСК) уже назначен Кубок России (Путь РПЛ). В один день может быть либо РПЛ, либо Путь РПЛ.'
+          : '⚠️ На выбранную реальную дату (МСК) уже назначены матчи РПЛ. В один день может быть либо РПЛ, либо Путь РПЛ.');
+      }
+      if (msgs.length) {
+        box.innerHTML = msgs.join('<br>');
+        box.style.display = 'block';
+      } else {
+        box.style.display = 'none';
+      }
+    };
+
     gdInput.onchange = () => {
       const p = mEl.querySelector('#gdate_preview');
       if (p) p.textContent = fmtD(gdInput.value);
+      updateConflictWarn();
     };
     rdInput.onchange = () => {
       const p = mEl.querySelector('#rdate_preview');
       if (p) p.textContent = fmtD(rdInput.value);
+      updateConflictWarn();
     };
+    updateConflictWarn();
 
     mEl.querySelector('#sched_modal_cancel').onclick = () => m.remove();
 
@@ -2057,7 +2099,7 @@ function route() {
   });
 }
 
-const fxRow = f => {
+const fxRow = (f, showComp = false) => {
   const ti = formatMatchTime(f);
   const sc = f.status === 'scheduled' || f.status === 'queued' || f.status === 'generating' ? (ti.timeStr || '—:—') : `${f.hg}:${f.ag}`;
   const st = f.status === 'live' ? '<span class="tag live">LIVE</span>' : (f.status === 'generating' || f.status === 'queued' ? '<span class="tag">готовится</span>' : '');
@@ -2072,8 +2114,26 @@ const fxRow = f => {
     ? `<span class="time-mode-badge real" title="Реальное время трансляции (1 тур в день)">РЕАЛ</span>`
     : `<span class="time-mode-badge game" title="Игровое футбольное расписание">ИГРА</span>`;
 
-  return `<a href="#/match/${f.id}" class="fx fxl" title="${tooltipText}">
-  <div class="d">${ti.dateStr}${ti.timeStr ? ' · ' + ti.timeStr : ''} ${badgeHtml}</div>
+  let compBadgeHtml = '';
+  if (showComp === true) {
+    const fullTip = e(f.label || (f.comp === 'rpl' && f.round ? `РПЛ · ${f.round}-й тур` : compName(f.comp)));
+    if (f.comp === 'rpl') {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="background:#ecfdf5;color:#065f46;border-color:#a7f3d0;font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">РПЛ</span>`;
+    } else if (f.comp === 'cup') {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="background:#eff6ff;color:#1d4ed8;border-color:#bfdbfe;font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">Кубок</span>`;
+    } else if (f.comp === 'supercup') {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="background:#fef3c7;color:#92400e;border-color:#fde68a;font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">Суперкубок</span>`;
+    } else if (f.comp === 'playoff' || f.comp === 'playoff_rpl_fnl') {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="background:#fef2f2;color:#991b1b;border-color:#fecaca;font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">Стыки</span>`;
+    } else if (f.comp === 'friendly_match') {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="background:#f8fafc;color:#475569;border-color:#cbd5e1;font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">Тов.</span>`;
+    } else {
+      compBadgeHtml = `<span class="tag" title="${fullTip}" style="font-size:10px;padding:1px 5px;line-height:1.2;white-space:nowrap">${e(compName(f.comp))}</span>`;
+    }
+  }
+
+  return `<a href="#/match/${f.id}" class="fx fxl" title="${tooltipText}${showComp === true && f.label ? ' · ' + e(f.label) : ''}">
+  <div class="d">${ti.dateStr}${ti.timeStr ? ' · ' + ti.timeStr : ''} <span style="display:inline-flex;align-items:center;gap:3px;vertical-align:middle">${badgeHtml}${compBadgeHtml}</span></div>
   <div class="t r">
     <span class="t-name">${e(f.homeName)}</span>
     ${homeLogo ? `<img class="t-logo md" src="${homeLogo}" alt="${e(f.homeName)}" loading="lazy" onerror="this.style.display='none'"/>` : ''}
@@ -2084,8 +2144,8 @@ const fxRow = f => {
     <span class="t-name">${e(f.awayName)}</span>
   </div>
   <div class="x row" style="justify-content:flex-end;gap:5px">
-    ${f.neutralField ? '<span class="tag" style="background:#fef3c7;color:#92400e;border-color:#fde047;font-size:10.5px">нейтральное поле</span>' : ''}
-    ${f.groupId ? `<span class="tag" style="background:#f1f5f9;color:#334155;border-color:#cbd5e1;font-size:11px">Группа ${f.groupId}</span>` : ''}
+    ${f.neutralField && showComp !== true ? '<span class="tag" style="background:#fef3c7;color:#92400e;border-color:#fde047;font-size:10.5px">нейтральное поле</span>' : ''}
+    ${f.groupId && showComp !== true ? `<span class="tag" style="background:#f1f5f9;color:#334155;border-color:#cbd5e1;font-size:11px">Группа ${f.groupId}</span>` : ''}
     ${f.weatherShort ? `<span class="tag weather-pill" title="Погода: ${e(f.weather || '')}" style="background:#f0f9ff;color:#0369a1;border-color:#bae6fd;font-size:11px;font-weight:600">${e(f.weatherShort)}</span>` : ''}
     ${f.derby ? '<span class="tag derby">дерби</span>' : ''}
     ${f.rivalry ? '<span class="tag" style="background:#ede9fe;color:#5b21b6;border-color:#c4b5fd">принципиальный</span>' : ''}
@@ -2364,12 +2424,17 @@ async function pgLogin(app) {
 /* ───── главная ───── */
 async function pgHome(app) {
   const [rawFx, rawTb, topTr] = await Promise.all([
-    api('/fixtures?comp=rpl').catch(() => []),
+    api('/fixtures').catch(() => []),
     api('/table/rpl').catch(() => []),
     api('/transfers/top').catch(() => ({ expensive: [], valuable: [], flops: [] }))
   ]);
-  const fx = Array.isArray(rawFx) ? rawFx : [];
+  const allFx = Array.isArray(rawFx) ? rawFx : [];
   const tb = Array.isArray(rawTb) ? rawTb : [];
+  const rplTeamIds = new Set([
+    ...((S.st?.teams || []).filter(t => t.comp === 'rpl').map(t => t.id)),
+    ...(tb.map(r => r.id).filter(Boolean))
+  ]);
+  const fx = allFx.filter(f => f.comp === 'rpl' || rplTeamIds.has(f.home) || rplTeamIds.has(f.away));
   const fxRealTs = f => {
     if (Number.isFinite(f?.realStartAt)) return f.realStartAt;
     const rd = String(f?.realDate || f?.date || '').trim();
@@ -2515,11 +2580,11 @@ async function pgHome(app) {
 
   app.innerHTML = `<h1>Сезон ${e(S.st?.season || '2026/27')}</h1>
 
-  ${live.length ? `<div class="panel"><h3><span class="live-dot"></span>Сейчас идут</h3>${live.map(fxRow).join('')}</div>` : ''}
+  ${live.length ? `<div class="panel"><h3><span class="live-dot"></span>Сейчас идут</h3>${live.map(f => fxRow(f, true)).join('')}</div>` : ''}
   <div class="grid g2">
     <div>
-      <div class="panel"><h3>Ближайшие матчи РПЛ</h3>${next.length ? next.map(fxRow).join('') : '<div class="empty">Расписание ещё не создано или сезон завершён.</div>'}</div>
-      <div class="panel"><h3>Последние результаты</h3>${last.length ? last.map(fxRow).join('') : '<div class="empty">Матчей пока не было.</div>'}</div>
+      <div class="panel"><h3>Ближайшие матчи</h3>${next.length ? next.map(f => fxRow(f, true)).join('') : '<div class="empty">Расписание ещё не создано или сезон завершён.</div>'}</div>
+      <div class="panel"><h3>Последние результаты</h3>${last.length ? last.map(f => fxRow(f, true)).join('') : '<div class="empty">Матчей пока не было.</div>'}</div>
       <div class="panel" id="home_top_transfers">
         <div class="row sp" style="margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div style="display:flex;align-items:center;gap:8px;cursor:pointer" id="tr_header_title" title="Нажмите, чтобы открыть Топ-10 трансферов">

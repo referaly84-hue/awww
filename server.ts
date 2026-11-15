@@ -8536,6 +8536,7 @@ function advanceCup() {
       { a: tD[0].id, b: tC[1].id, name: "1/8 \u0444\u0438\u043D\u0430\u043B\u0430 \u041F\u0443\u0442\u0438 \u0420\u041F\u041B \xB7 \u041F\u0430\u0440\u0430 4" }
     ];
     ties.forEach((tie, idx) => {
+      const leg1Date = pickNonRplGameDate(ko(228), S());
       const fx1 = {
         id: uid(),
         season: S(),
@@ -8546,7 +8547,7 @@ function advanceCup() {
         leg: 1,
         round: 201,
         label: `${tie.name} (1-\u0439 \u043C\u0430\u0442\u0447)`,
-        date: ko(228),
+        date: leg1Date,
         time: idx % 2 === 0 ? "18:00" : "20:30",
         home: tie.b,
         away: tie.a,
@@ -8557,6 +8558,7 @@ function advanceCup() {
       };
       assignReferee(fx1);
       db.fixtures.push(fx1);
+      const leg2Date = pickNonRplGameDate(ko(242), S());
       const fx2 = {
         id: uid(),
         season: S(),
@@ -8567,7 +8569,7 @@ function advanceCup() {
         leg: 2,
         round: 202,
         label: `${tie.name} (\u041E\u0442\u0432\u0435\u0442\u043D\u044B\u0439 \u043C\u0430\u0442\u0447)`,
-        date: ko(242),
+        date: leg2Date,
         time: idx % 2 === 0 ? "18:00" : "20:30",
         home: tie.a,
         away: tie.b,
@@ -8606,6 +8608,7 @@ function advanceCup() {
       assignReferee(fx2);
       db.fixtures.push(fx2);
     });
+    ensureDualTimes(S(), false);
     save();
   }
   const existingQF = seasonFx().filter((f) => f.comp === "cup" && f.cupStage === "rpl_playoff_qf");
@@ -8637,6 +8640,7 @@ function advanceCup() {
         { a: rplWinners[2], b: rplWinners[3], name: "1/4 \u0444\u0438\u043D\u0430\u043B\u0430 \u041F\u0443\u0442\u0438 \u0420\u041F\u041B \xB7 \u041F\u0430\u0440\u0430 2" }
       ];
       qfTies.forEach((tie, idx) => {
+        const qfLeg1Date = pickNonRplGameDate(ko(263), S());
         const f1 = {
           id: uid(),
           season: S(),
@@ -8647,7 +8651,7 @@ function advanceCup() {
           leg: 1,
           round: 211,
           label: `${tie.name} (1-\u0439 \u043C\u0430\u0442\u0447)`,
-          date: ko(263),
+          date: qfLeg1Date,
           time: idx === 0 ? "18:00" : "20:30",
           home: tie.b,
           away: tie.a,
@@ -8656,6 +8660,7 @@ function advanceCup() {
           ag: null,
           pos: 0
         };
+        const qfLeg2Date = pickNonRplGameDate(ko(277), S());
         const f2 = {
           id: uid(),
           season: S(),
@@ -8666,7 +8671,7 @@ function advanceCup() {
           leg: 2,
           round: 212,
           label: `${tie.name} (\u041E\u0442\u0432\u0435\u0442\u043D\u044B\u0439 \u043C\u0430\u0442\u0447)`,
-          date: ko(277),
+          date: qfLeg2Date,
           time: idx === 0 ? "18:00" : "20:30",
           home: tie.a,
           away: tie.b,
@@ -8719,6 +8724,7 @@ function advanceCup() {
       assignReferee(f2);
       db.fixtures.push(f1, f2);
     }
+    ensureDualTimes(S(), false);
     save();
   }
   const existingSF = seasonFx().filter((f) => f.comp === "cup" && f.cupStage === "rpl_playoff_sf");
@@ -8734,6 +8740,7 @@ function advanceCup() {
     const w2 = qf2_1 && qf2_2 ? qf2_1.ag + qf2_2.hg > qf2_1.hg + qf2_2.ag ? qf2_2.home : qf2_1.home : null;
     const regSfTeams = regQF.map(winnerOf).filter(Boolean);
     if (w1 && w2) {
+      const sfLeg1Date = pickNonRplGameDate(ko(291), S());
       const f1 = {
         id: uid(),
         season: S(),
@@ -8744,7 +8751,7 @@ function advanceCup() {
         leg: 1,
         round: 221,
         label: "\u0424\u0438\u043D\u0430\u043B \u041F\u0443\u0442\u0438 \u0420\u041F\u041B (1-\u0439 \u043C\u0430\u0442\u0447)",
-        date: ko(291),
+        date: sfLeg1Date,
         time: "19:30",
         home: w2,
         away: w1,
@@ -8753,6 +8760,7 @@ function advanceCup() {
         ag: null,
         pos: 0
       };
+      const sfLeg2Date = pickNonRplGameDate(ko(305), S());
       const f2 = {
         id: uid(),
         season: S(),
@@ -8763,7 +8771,7 @@ function advanceCup() {
         leg: 2,
         round: 222,
         label: "\u0424\u0438\u043D\u0430\u043B \u041F\u0443\u0442\u0438 \u0420\u041F\u041B (\u041E\u0442\u0432\u0435\u0442\u043D\u044B\u0439 \u043C\u0430\u0442\u0447)",
-        date: ko(305),
+        date: sfLeg2Date,
         time: "19:30",
         home: w1,
         away: w2,
@@ -8797,6 +8805,7 @@ function advanceCup() {
       assignReferee(fReg);
       db.fixtures.push(fReg);
     }
+    ensureDualTimes(S(), false);
     save();
   }
   const sfDone = existingSF.length >= 2 && existingSF.every((f) => f.status === "done");
@@ -8889,15 +8898,153 @@ function getAvailableSeasons() {
   }
   return Array.from(set).sort();
 }
+function isCupRplPath(f) {
+  if (!f || f.comp !== "cup") return false;
+  if (f.cupPath === "rpl_group" || f.cupPath === "rpl_playoff") return true;
+  const stg = String(f.cupStage || "").toLowerCase();
+  if (stg.startsWith("rpl_playoff") || stg.startsWith("rpl_")) return true;
+  const lbl = String(f.label || "").toLowerCase();
+  if (lbl.includes("\u043F\u0443\u0442\u044C \u0440\u043F\u043B") || lbl.includes("\u043F\u0443\u0442\u0438 \u0440\u043F\u043B")) return true;
+  if (!f.cupPath && !f.cupStage && Number(f.round) >= 1 && Number(f.round) <= 6) return true;
+  return false;
+}
+function pickNonRplGameDate(preferredDate, targetSeason) {
+  const season = targetSeason || S();
+  const rplDates = new Set(
+    (db.fixtures || []).filter((f) => f.season === season && f.comp === "rpl").map((f) => f.gameDate || f.date).filter(Boolean)
+  );
+  if (!rplDates.has(preferredDate)) return preferredDate;
+  for (let delta = 1; delta <= 14; delta++) {
+    const plus = addDays(preferredDate, delta);
+    if (!rplDates.has(plus)) return plus;
+    const minus = addDays(preferredDate, -delta);
+    if (!rplDates.has(minus)) return minus;
+  }
+  return preferredDate;
+}
+function enforceRplCupGameDateSeparation(seasonFixtures) {
+  let changed = false;
+  const rplDates = new Set(seasonFixtures.filter((f) => f.comp === "rpl").map((f) => f.gameDate || f.date).filter(Boolean));
+  const cupRplFx = seasonFixtures.filter((f) => isCupRplPath(f));
+  const cupRplDates = new Set(cupRplFx.map((f) => f.gameDate || f.date).filter(Boolean));
+  const lockedStatuses = /* @__PURE__ */ new Set(["done", "live", "generating", "queued"]);
+  const dateShiftMap = /* @__PURE__ */ new Map();
+  for (const f of cupRplFx) {
+    const gd = f.gameDate || f.date;
+    if (!gd || !rplDates.has(gd)) continue;
+    if (lockedStatuses.has(f.status)) continue;
+    let target = dateShiftMap.get(gd);
+    if (!target) {
+      for (let delta = 1; delta <= 14; delta++) {
+        const plus = addDays(gd, delta);
+        if (!rplDates.has(plus)) {
+          target = plus;
+          break;
+        }
+        const minus = addDays(gd, -delta);
+        if (!rplDates.has(minus)) {
+          target = minus;
+          break;
+        }
+      }
+      if (target) dateShiftMap.set(gd, target);
+    }
+    if (target) {
+      f.date = target;
+      f.gameDate = target;
+      changed = true;
+    }
+  }
+  for (const f of seasonFixtures) {
+    if (f.comp !== "rpl" || lockedStatuses.has(f.status)) continue;
+    const gd = f.gameDate || f.date;
+    if (!gd) continue;
+    const curCupDates = new Set(seasonFixtures.filter((x) => isCupRplPath(x)).map((x) => x.gameDate || x.date).filter(Boolean));
+    if (!curCupDates.has(gd)) continue;
+    for (let delta = 1; delta <= 14; delta++) {
+      const plus = addDays(gd, delta);
+      if (!curCupDates.has(plus)) {
+        f.date = plus;
+        f.gameDate = plus;
+        changed = true;
+        break;
+      }
+      const minus = addDays(gd, -delta);
+      if (!curCupDates.has(minus)) {
+        f.date = minus;
+        f.gameDate = minus;
+        changed = true;
+        break;
+      }
+    }
+  }
+  return changed;
+}
+function enforceRplCupRealDateSeparation(seasonFixtures) {
+  let changed = false;
+  const lockedStatuses = /* @__PURE__ */ new Set(["done", "live", "generating", "queued"]);
+  const findConflict = () => {
+    const rplDates = /* @__PURE__ */ new Set();
+    const cupDates = /* @__PURE__ */ new Set();
+    for (const f of seasonFixtures) {
+      if (!f.realDate) continue;
+      if (f.comp === "rpl") rplDates.add(f.realDate);
+      else if (isCupRplPath(f)) cupDates.add(f.realDate);
+    }
+    for (const d of cupDates) {
+      if (rplDates.has(d)) return d;
+    }
+    return null;
+  };
+  let guard = 0;
+  let conflictDate;
+  while ((conflictDate = findConflict()) && guard++ < 200) {
+    const rplOnDay = seasonFixtures.filter((f) => f.comp === "rpl" && f.realDate === conflictDate);
+    const cupOnDay = seasonFixtures.filter((f) => isCupRplPath(f) && f.realDate === conflictDate);
+    const rplLocked = rplOnDay.some((f) => lockedStatuses.has(f.status));
+    const cupLocked = cupOnDay.some((f) => lockedStatuses.has(f.status));
+    const allRplDates = new Set(seasonFixtures.filter((f) => f.comp === "rpl" && f.realDate).map((f) => f.realDate));
+    const allCupDates = new Set(seasonFixtures.filter((f) => isCupRplPath(f) && f.realDate).map((f) => f.realDate));
+    const occupied = new Set([...allRplDates, ...allCupDates]);
+    let nextFree = addDays(conflictDate, 1);
+    while (occupied.has(nextFree)) nextFree = addDays(nextFree, 1);
+    if (!cupLocked) {
+      cupOnDay.forEach((f) => {
+        if (!lockedStatuses.has(f.status)) {
+          f.realDate = nextFree;
+          changed = true;
+        }
+      });
+    } else if (!rplLocked) {
+      rplOnDay.forEach((f) => {
+        if (!lockedStatuses.has(f.status)) {
+          f.realDate = nextFree;
+          changed = true;
+        }
+      });
+    } else {
+      break;
+    }
+  }
+  return changed;
+}
 function ensureDualTimes(targetSeason, force = false) {
   const season = targetSeason || S();
   const seasonFixtures = db.fixtures.filter((f) => f.season === season);
-  if (!seasonFixtures.length) return;
+  if (!seasonFixtures.length) return false;
+  let changed = false;
   const baseRealStart = db.settings.realStartDate || (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
   seasonFixtures.forEach((f) => {
-    if (!f.gameDate || force) f.gameDate = f.date;
-    if (!f.gameTime || force) f.gameTime = f.time;
+    if (!f.gameDate || force) {
+      if (f.gameDate !== f.date) changed = true;
+      f.gameDate = f.date;
+    }
+    if (!f.gameTime || force) {
+      if (f.gameTime !== f.time) changed = true;
+      f.gameTime = f.time;
+    }
   });
+  if (enforceRplCupGameDateSeparation(seasonFixtures)) changed = true;
   const rplAndCupFx = seasonFixtures.filter((f) => f.comp === "rpl" || f.comp === "cup" || f.comp === "supercup");
   const tourBlocks = /* @__PURE__ */ new Map();
   rplAndCupFx.forEach((f) => {
@@ -8906,32 +9053,43 @@ function ensureDualTimes(targetSeason, force = false) {
       tourKey = "supercup";
     } else if (f.comp === "rpl") {
       tourKey = `rpl_tour_${String(f.round).padStart(2, "0")}`;
-    } else {
-      if (f.cupPath === "regions_qual") {
-        tourKey = `cup_regions_r${f.qualRound || f.round}`;
-      } else if (f.cupPath === "rpl_group") {
+    } else if (isCupRplPath(f)) {
+      if (f.cupPath === "rpl_group" || !f.cupPath && Number(f.round) <= 6) {
         tourKey = `cup_rpl_grp_r${f.round}`;
       } else {
-        tourKey = `cup_stage_${f.cupStage || f.round}`;
+        tourKey = `cup_rpl_stage_${f.cupStage || "ko"}_r${f.round || f.leg || 1}`;
+      }
+    } else {
+      if (f.cupPath === "regions_qual") {
+        tourKey = `cup_regions_r${f.qualRound || f.round || "qual"}`;
+      } else {
+        tourKey = `cup_stage_${f.cupStage || f.round || "other"}`;
       }
     }
     if (!tourBlocks.has(tourKey)) {
       tourBlocks.set(tourKey, {
         key: tourKey,
         comp: f.comp,
+        isRpl: f.comp === "rpl",
+        hasCupRpl: false,
+        isLocked: false,
         minGameDate: f.gameDate || f.date,
         fixtures: []
       });
     }
     const b = tourBlocks.get(tourKey);
     b.fixtures.push(f);
-    if ((f.gameDate || f.date) < b.minGameDate) {
-      b.minGameDate = f.gameDate || f.date;
+    if (isCupRplPath(f)) b.hasCupRpl = true;
+    if (f.status === "done" || f.status === "live" || f.status === "generating" || f.status === "queued") {
+      b.isLocked = true;
+    }
+    const gd = f.gameDate || f.date;
+    if (gd && gd < b.minGameDate) {
+      b.minGameDate = gd;
     }
   });
-  const sortedBlocks = Array.from(tourBlocks.values()).sort((a, b) => a.minGameDate.localeCompare(b.minGameDate));
-  sortedBlocks.forEach((block, blockIndex) => {
-    const realDayDate = addDays(baseRealStart, blockIndex);
+  const sortedBlocks = Array.from(tourBlocks.values()).sort((a, b) => a.minGameDate.localeCompare(b.minGameDate) || a.key.localeCompare(b.key));
+  const buildTimesForBlock = (block, blockIndex) => {
     const N = block.fixtures.length;
     block.fixtures.sort((a, b) => a.id.localeCompare(b.id));
     const randomTimes = [];
@@ -8964,20 +9122,111 @@ function ensureDualTimes(targetSeason, force = false) {
       const mm = String(slotMin % 60).padStart(2, "0");
       randomTimes.push(`${hh}:${mm}`);
     });
-    block.fixtures.forEach((f, fi) => {
-      if (!f.realDate || force) f.realDate = realDayDate;
-      if (!f.realTime || force) f.realTime = randomTimes[fi] || "14:00";
+    return randomTimes;
+  };
+  const validDateRe = /^\d{4}-\d{2}-\d{2}$/;
+  const validTimeRe = /^\d{1,2}:\d{2}/;
+  const hasMissingReal = rplAndCupFx.some((f) => !validDateRe.test(String(f.realDate || "")) || !validTimeRe.test(String(f.realTime || "")));
+  const rplRealSet = new Set(seasonFixtures.filter((f) => f.comp === "rpl" && validDateRe.test(String(f.realDate || ""))).map((f) => f.realDate));
+  const cupRplRealSet = new Set(seasonFixtures.filter((f) => isCupRplPath(f) && validDateRe.test(String(f.realDate || ""))).map((f) => f.realDate));
+  const hasRplCupRealConflict = Array.from(cupRplRealSet).some((d) => rplRealSet.has(d));
+  if (force) {
+    sortedBlocks.forEach((block, blockIndex) => {
+      const realDayDate = addDays(baseRealStart, blockIndex);
+      const randomTimes = buildTimesForBlock(block, blockIndex);
+      block.fixtures.forEach((f, fi) => {
+        if (f.realDate !== realDayDate) changed = true;
+        f.realDate = realDayDate;
+        const rt = randomTimes[fi] || "14:00";
+        if (f.realTime !== rt) changed = true;
+        f.realTime = rt;
+      });
     });
-  });
+  } else if (hasMissingReal || hasRplCupRealConflict) {
+    const lockedStatuses = /* @__PURE__ */ new Set(["done", "live", "generating", "queued"]);
+    let maxLockedDate = "";
+    const reservedDates = /* @__PURE__ */ new Set();
+    sortedBlocks.forEach((b) => {
+      if (!b.isLocked) return;
+      b.fixtures.forEach((f) => {
+        if (validDateRe.test(String(f.realDate || ""))) {
+          reservedDates.add(f.realDate);
+          if ((f.comp === "rpl" || f.comp === "supercup" || isCupRplPath(f)) && f.realDate > maxLockedDate) {
+            maxLockedDate = f.realDate;
+          }
+        }
+      });
+    });
+    const toReschedule = [];
+    sortedBlocks.forEach((b, blockIndex) => {
+      const randomTimes = buildTimesForBlock(b, blockIndex);
+      if (b.isLocked) {
+        const blockReal = b.fixtures.find((f) => validDateRe.test(String(f.realDate || "")))?.realDate || addDays(baseRealStart, blockIndex);
+        b.fixtures.forEach((f, fi) => {
+          if (!validDateRe.test(String(f.realDate || ""))) {
+            f.realDate = blockReal;
+            changed = true;
+          }
+          if (!validTimeRe.test(String(f.realTime || ""))) {
+            f.realTime = randomTimes[fi] || "14:00";
+            changed = true;
+          }
+        });
+        return;
+      }
+      const allValid = b.fixtures.every((f) => validDateRe.test(String(f.realDate || "")));
+      const existingMinDate = allValid ? b.fixtures.map((f) => f.realDate).sort()[0] : "";
+      if (!b.isRpl && !b.hasCupRpl && allValid && maxLockedDate && existingMinDate <= maxLockedDate) {
+        b.fixtures.forEach((f, fi) => {
+          if (!validTimeRe.test(String(f.realTime || ""))) {
+            f.realTime = randomTimes[fi] || "14:00";
+            changed = true;
+          }
+        });
+        return;
+      }
+      toReschedule.push({ block: b, blockIndex, randomTimes });
+    });
+    let cursor = baseRealStart;
+    if (maxLockedDate) {
+      const afterLocked = addDays(maxLockedDate, 1);
+      if (afterLocked > cursor) cursor = afterLocked;
+    }
+    toReschedule.forEach(({ block, randomTimes }) => {
+      while (reservedDates.has(cursor)) {
+        cursor = addDays(cursor, 1);
+      }
+      const assignedDate = cursor;
+      reservedDates.add(assignedDate);
+      cursor = addDays(cursor, 1);
+      block.fixtures.forEach((f, fi) => {
+        if (lockedStatuses.has(f.status)) return;
+        if (f.realDate !== assignedDate) {
+          f.realDate = assignedDate;
+          changed = true;
+        }
+        if (!validTimeRe.test(String(f.realTime || ""))) {
+          f.realTime = randomTimes[fi] || "14:00";
+          changed = true;
+        }
+      });
+    });
+  }
+  if (enforceRplCupRealDateSeparation(seasonFixtures)) changed = true;
   seasonFixtures.filter((f) => f.comp !== "rpl" && f.comp !== "cup" && f.comp !== "supercup").forEach((f) => {
     const rnd = Number(f.round) || 1;
     if (!f.realDate || force && f.comp !== FRIENDLY_COMP) {
-      f.realDate = addDays(baseRealStart, rnd - 1);
+      const rd = addDays(baseRealStart, rnd - 1);
+      if (f.realDate !== rd) changed = true;
+      f.realDate = rd;
     }
     if (!f.realTime || force && f.comp !== FRIENDLY_COMP) {
-      f.realTime = f.time || "14:00";
+      const rt = f.time || "14:00";
+      if (f.realTime !== rt) changed = true;
+      f.realTime = rt;
     }
   });
+  return changed;
 }
 function getSeasonPlayoffs(targetSeason) {
   const season = targetSeason || S();
@@ -11134,6 +11383,7 @@ app.post("/api/admin/draw/apply-cup-rpl", admin, (req, res) => {
     ];
     roundMatches.forEach((m, slotIdx) => {
       const schedule2 = slotSchedule[slotIdx] || { date: dates.wed, time: "18:00" };
+      const resolvedDate = pickNonRplGameDate(schedule2.date, season);
       const fxObj = {
         id: uid(),
         season,
@@ -11142,7 +11392,7 @@ app.post("/api/admin/draw/apply-cup-rpl", admin, (req, res) => {
         groupId: m.gid,
         round: roundIdx + 1,
         label: `\u041F\u0443\u0442\u044C \u0420\u041F\u041B \xB7 ${roundIdx + 1}-\u0439 \u0442\u0443\u0440`,
-        date: schedule2.date,
+        date: resolvedDate,
         time: schedule2.time,
         home: m.home,
         away: m.away,
@@ -11156,6 +11406,8 @@ app.post("/api/admin/draw/apply-cup-rpl", admin, (req, res) => {
     });
   }
   db.fixtures.push(...newFixtures);
+  syncRplFridaySchedules();
+  ensureDualTimes(season, false);
   save();
   invalidateAgg();
   res.json({ ok: 1, message: "\u0413\u0440\u0443\u043F\u043F\u043E\u0432\u043E\u0439 \u044D\u0442\u0430\u043F \u041F\u0443\u0442\u0438 \u0420\u041F\u041B \u0443\u0441\u043F\u0435\u0448\u043D\u043E \u0441\u0444\u043E\u0440\u043C\u0438\u0440\u043E\u0432\u0430\u043D \u043F\u043E \u0438\u0442\u043E\u0433\u0430\u043C \u0436\u0435\u0440\u0435\u0431\u044C\u0451\u0432\u043A\u0438!", count: newFixtures.length });
@@ -11195,6 +11447,7 @@ app.post("/api/admin/draw/apply-cup-regions", admin, (req, res) => {
     newFixtures.push(fxObj);
   });
   db.fixtures.push(...newFixtures);
+  ensureDualTimes(season, false);
   save();
   invalidateAgg();
   res.json({ ok: 1, message: `1-\u0439 \u0440\u0430\u0443\u043D\u0434 \u041F\u0443\u0442\u0438 \u0440\u0435\u0433\u0438\u043E\u043D\u043E\u0432 \u0441\u0444\u043E\u0440\u043C\u0438\u0440\u043E\u0432\u0430\u043D (${newFixtures.length} \u043C\u0430\u0442\u0447\u0435\u0439)!` });
@@ -13810,6 +14063,24 @@ app.post("/api/admin/fixture", admin, (req, res) => {
     advanceCup();
   }
   const gDate = String(req.body.gameDate || req.body.date || "").trim();
+  const rDate = String(req.body.realDate || "").trim();
+  const isThisRpl = f.comp === "rpl";
+  const isThisCupRpl = isCupRplPath(f);
+  if (isThisRpl || isThisCupRpl) {
+    const sameSeasonFx = (db.fixtures || []).filter((x) => x.id !== f.id && x.season === f.season);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(gDate) && gDate !== (f.gameDate || f.date)) {
+      const gameConflict = sameSeasonFx.some((x) => (isThisRpl ? isCupRplPath(x) : x.comp === "rpl") && (x.gameDate || x.date) === gDate);
+      if (gameConflict) {
+        return fail(res, isThisRpl ? "\u0412 \u044D\u0442\u0443 \u0438\u0433\u0440\u043E\u0432\u0443\u044E \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u0438\u0434\u0451\u0442 \u041A\u0443\u0431\u043E\u043A \u0420\u043E\u0441\u0441\u0438\u0438 (\u041F\u0443\u0442\u044C \u0420\u041F\u041B). \u0412 \u043E\u0434\u0438\u043D \u0434\u0435\u043D\u044C \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043B\u0438\u0431\u043E \u0420\u041F\u041B, \u043B\u0438\u0431\u043E \u041F\u0443\u0442\u044C \u0420\u041F\u041B." : "\u0412 \u044D\u0442\u0443 \u0438\u0433\u0440\u043E\u0432\u0443\u044E \u0434\u0430\u0442\u0443 \u0443\u0436\u0435 \u0437\u0430\u043F\u043B\u0430\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u044B \u043C\u0430\u0442\u0447\u0438 \u0420\u041F\u041B. \u0412 \u043E\u0434\u0438\u043D \u0434\u0435\u043D\u044C \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043B\u0438\u0431\u043E \u0420\u041F\u041B, \u043B\u0438\u0431\u043E \u041F\u0443\u0442\u044C \u0420\u041F\u041B.");
+      }
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(rDate) && rDate !== f.realDate) {
+      const realConflict = sameSeasonFx.some((x) => (isThisRpl ? isCupRplPath(x) : x.comp === "rpl") && x.realDate === rDate);
+      if (realConflict) {
+        return fail(res, isThisRpl ? "\u0412 \u044D\u0442\u043E\u0442 \u0434\u0435\u043D\u044C (\u041C\u0421\u041A) \u0443\u0436\u0435 \u0438\u0434\u0451\u0442 \u041A\u0443\u0431\u043E\u043A \u0420\u043E\u0441\u0441\u0438\u0438 (\u041F\u0443\u0442\u044C \u0420\u041F\u041B). \u0412 \u043E\u0434\u0438\u043D \u0434\u0435\u043D\u044C \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043B\u0438\u0431\u043E \u0420\u041F\u041B, \u043B\u0438\u0431\u043E \u041F\u0443\u0442\u044C \u0420\u041F\u041B." : "\u0412 \u044D\u0442\u043E\u0442 \u0434\u0435\u043D\u044C (\u041C\u0421\u041A) \u0443\u0436\u0435 \u0437\u0430\u043F\u043B\u0430\u043D\u0438\u0440\u043E\u0432\u0430\u043D\u044B \u043C\u0430\u0442\u0447\u0438 \u0420\u041F\u041B. \u0412 \u043E\u0434\u0438\u043D \u0434\u0435\u043D\u044C \u043C\u043E\u0436\u0435\u0442 \u0431\u044B\u0442\u044C \u043B\u0438\u0431\u043E \u0420\u041F\u041B, \u043B\u0438\u0431\u043E \u041F\u0443\u0442\u044C \u0420\u041F\u041B.");
+      }
+    }
+  }
   if (/^\d{4}-\d{2}-\d{2}$/.test(gDate)) {
     f.gameDate = gDate;
     f.date = gDate;
@@ -13821,7 +14092,6 @@ app.post("/api/admin/fixture", admin, (req, res) => {
     f.time = gTime;
   }
   let realSchedChanged = false;
-  const rDate = String(req.body.realDate || "").trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(rDate)) {
     if (f.realDate !== rDate) realSchedChanged = true;
     f.realDate = rDate;
@@ -16898,7 +17168,7 @@ ${offersSummary}
 });
 function syncRplFridaySchedules() {
   const rplCupDates = new Set(
-    (db.fixtures || []).filter((f) => f.comp === "cup" && f.cupPath === "rpl_group").map((f) => f.date)
+    (db.fixtures || []).filter((f) => isCupRplPath(f)).map((f) => f.gameDate || f.date).filter(Boolean)
   );
   const rplFx = (db.fixtures || []).filter((f) => f.comp === "rpl" && f.status !== "done");
   const byRound = {};
@@ -16907,6 +17177,16 @@ function syncRplFridaySchedules() {
     byRound[f.round].push(f);
   });
   let changed = false;
+  const avoidCupDay = (d) => {
+    if (!rplCupDates.has(d)) return d;
+    for (let delta = 1; delta <= 7; delta++) {
+      const p = addDays(d, delta);
+      if (!rplCupDates.has(p)) return p;
+      const m = addDays(d, -delta);
+      if (!rplCupDates.has(m)) return m;
+    }
+    return d;
+  };
   for (const [rStr, list] of Object.entries(byRound)) {
     const ri = Number(rStr) - 1;
     if (!list || list.length < 8) continue;
@@ -16934,9 +17214,12 @@ function syncRplFridaySchedules() {
           const sunTimes = satCount === 3 ? ["14:00", "16:30", "19:00", "21:00"] : ["14:00", "16:30", "19:00"];
           newTime = sunTimes[(mi - 1 - satCount) % sunTimes.length];
         }
-        if (f.date !== newDate || f.time !== newTime) {
+        newDate = avoidCupDay(newDate);
+        if (f.date !== newDate || f.time !== newTime || f.gameDate !== newDate || f.gameTime !== newTime) {
           f.date = newDate;
+          f.gameDate = newDate;
           f.time = newTime;
+          f.gameTime = newTime;
           changed = true;
         }
       });
@@ -16953,9 +17236,12 @@ function syncRplFridaySchedules() {
           newDate = addDays(sat, 2);
           newTime = "19:30";
         }
-        if (f.date !== newDate || f.time !== newTime) {
+        newDate = avoidCupDay(newDate);
+        if (f.date !== newDate || f.time !== newTime || f.gameDate !== newDate || f.gameTime !== newTime) {
           f.date = newDate;
+          f.gameDate = newDate;
           f.time = newTime;
+          f.gameTime = newTime;
           changed = true;
         }
       });
@@ -16964,7 +17250,7 @@ function syncRplFridaySchedules() {
   if (changed) save();
 }
 syncRplFridaySchedules();
-ensureDualTimes();
+if (ensureDualTimes()) save();
 {
   const exp = expireFriendlies();
   const age2 = syncPlayerAges();
