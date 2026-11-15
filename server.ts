@@ -8214,67 +8214,47 @@ function ensureSeasonFriendlies(y0) {
       nt.current.matches.push(m);
     }
   }
-  const findTeam = (name) => (db.teams || []).find((t) => t.name.toLowerCase().includes(name.toLowerCase()));
-  const clubPairs = [
-    // В паузу 21 сентября — 6 октября: клубные спарринги на выходных
-    { home: "\u0421\u043F\u0430\u0440\u0442\u0430\u043A", away: "\u0422\u043E\u0440\u043F\u0435\u0434\u043E", date: `${y}-09-26`, time: "14:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u0426\u0421\u041A\u0410", away: "\u0420\u043E\u0434\u0438\u043D\u0430", date: `${y}-09-27`, time: "15:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u0417\u0435\u043D\u0438\u0442", away: "\u0411\u0430\u043B\u0442\u0438\u043A\u0430", date: `${y}-10-03`, time: "16:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u041B\u043E\u043A\u043E\u043C\u043E\u0442\u0438\u0432", away: "\u0428\u0438\u043D\u043D\u0438\u043A", date: `${y}-10-04`, time: "14:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    // В ноябрьскую паузу (9–17 ноября)
-    { home: "\u0414\u0438\u043D\u0430\u043C\u043E \u041C\u043E\u0441\u043A\u0432\u0430", away: "\u0427\u0430\u0439\u043A\u0430", date: `${y}-11-14`, time: "14:30", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u041A\u0440\u0430\u0441\u043D\u043E\u0434\u0430\u0440", away: "\u0421\u043E\u0447\u0438", date: `${y}-11-15`, time: "15:00", note: "\u042E\u0436\u043D\u043E\u0435 \u0434\u0435\u0440\u0431\u0438 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u0420\u0443\u0431\u0438\u043D", away: "\u041A\u0410\u041C\u0410\u0417", date: `${y}-11-15`, time: "16:00", note: "\u0422\u0430\u0442\u0430\u0440\u0441\u0442\u0430\u043D\u0441\u043A\u043E\u0435 \u0434\u0435\u0440\u0431\u0438 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    // В зимний перерыв (февраль — сборы в ОАЭ и Турции)
-    { home: "\u0421\u043F\u0430\u0440\u0442\u0430\u043A", away: "\u0420\u043E\u0441\u0442\u043E\u0432", date: `${y + 1}-02-07`, time: "16:00", note: "\u0417\u0438\u043C\u043D\u0438\u0435 \u0441\u0431\u043E\u0440\u044B \u0432 \u0422\u0443\u0440\u0446\u0438\u0438 (\u0411\u0435\u043B\u0435\u043A)" },
-    { home: "\u0417\u0435\u043D\u0438\u0442", away: "\u0426\u0421\u041A\u0410", date: `${y + 1}-02-14`, time: "17:00", note: "Winline \u0417\u0438\u043C\u043D\u0438\u0439 \u043A\u0443\u0431\u043E\u043A (\u0410\u0431\u0443-\u0414\u0430\u0431\u0438, \u041E\u0410\u042D)" },
-    { home: "\u041B\u043E\u043A\u043E\u043C\u043E\u0442\u0438\u0432", away: "\u041A\u0440\u0430\u0441\u043D\u043E\u0434\u0430\u0440", date: `${y + 1}-02-21`, time: "16:30", note: "\u041A\u043E\u043D\u0442\u0440\u043E\u043B\u044C\u043D\u044B\u0439 \u043C\u0430\u0442\u0447 \u043D\u0430 \u0441\u0431\u043E\u0440\u0430\u0445 (\u0414\u0443\u0431\u0430\u0439, \u041E\u0410\u042D)" },
-    // В мартовскую паузу (23–31 марта)
-    { home: "\u041A\u0440\u044B\u043B\u044C\u044F \u0421\u043E\u0432\u0435\u0442\u043E\u0432", away: "\u0423\u0440\u0430\u043B", date: `${y + 1}-03-27`, time: "14:00", note: "\u0412\u0435\u0441\u0435\u043D\u043D\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    { home: "\u0410\u0445\u043C\u0430\u0442", away: "\u0427\u0435\u0440\u043D\u043E\u043C\u043E\u0440\u0435\u0446", date: `${y + 1}-03-28`, time: "16:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u0441\u043F\u0430\u0440\u0440\u0438\u043D\u0433 \u0432 \u043F\u0430\u0443\u0437\u0443 \u043D\u0430 \u0441\u0431\u043E\u0440\u043D\u044B\u0435" },
-    // В июньскую паузу (1–9 июня)
-    { home: "\u041F\u0430\u0440\u0438 \u041D\u041D", away: "\u0412\u043E\u043B\u0433\u0430", date: `${y + 1}-06-05`, time: "15:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u043C\u0430\u0442\u0447 \u0432 \u0438\u044E\u043D\u044C\u0441\u043A\u0443\u044E \u043F\u0430\u0443\u0437\u0443" },
-    { home: "\u041E\u0440\u0435\u043D\u0431\u0443\u0440\u0433", away: "\u0423\u0444\u0430", date: `${y + 1}-06-06`, time: "14:00", note: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u043C\u0430\u0442\u0447 \u0432 \u0438\u044E\u043D\u044C\u0441\u043A\u0443\u044E \u043F\u0430\u0443\u0437\u0443" }
-  ];
-  db.fixtures ||= [];
-  for (const p of clubPairs) {
-    const tHome = findTeam(p.home);
-    const tAway = findTeam(p.away);
-    if (!tHome || !tAway) continue;
-    const exists = db.fixtures.some(
-      (f) => f.comp === FRIENDLY_COMP && f.date === p.date && (f.home === tHome.id && f.away === tAway.id || f.home === tAway.id && f.away === tHome.id)
-    );
-    if (!exists) {
-      const f = {
-        id: uid(),
-        season: S(),
-        comp: FRIENDLY_COMP,
-        round: 1,
-        label: "\u0422\u043E\u0432\u0430\u0440\u0438\u0449\u0435\u0441\u043A\u0438\u0439 \u043C\u0430\u0442\u0447",
-        note: p.note,
-        date: p.date,
-        time: p.time,
-        gameDate: p.date,
-        gameTime: p.time,
-        realDate: p.date,
-        realTime: p.time || "19:00",
-        home: tHome.id,
-        away: tAway.id,
-        status: "scheduled",
-        hg: null,
-        ag: null,
-        pos: 0,
-        neutralField: p.note.includes("\u0441\u0431\u043E\u0440") || p.note.includes("\u041E\u0410\u042D") || p.note.includes("\u0422\u0443\u0440\u0446\u0438"),
-        stadium: tHome.stadium || `\u0421\u0442\u0430\u0434\u0438\u043E\u043D \xAB${tHome.name}\xBB`,
-        city: tHome.city || void 0
-      };
-      try {
-        assignFixtureWeather(f);
-      } catch {
-      }
-      db.fixtures.push(f);
+}
+function purgeAllClubFriendlies() {
+  if (!db || !Array.isArray(db.fixtures)) return 0;
+  const removedIds = new Set();
+  for (const f of db.fixtures) {
+    if (f.comp === FRIENDLY_COMP) removedIds.add(f.id);
+  }
+  if (!removedIds.size) {
+    if (Array.isArray(db.friendlyRequests) && db.friendlyRequests.length) {
+      db.friendlyRequests = [];
+    }
+    return 0;
+  }
+  for (const fid of removedIds) {
+    if (typeof timers !== "undefined" && timers && timers[fid]) {
+      clearTimeout(timers[fid]);
+      delete timers[fid];
+    }
+    if (typeof mcache !== "undefined" && mcache) mcache.delete(fid);
+    try {
+      pgDeleteMatch(fid);
+    } catch {
+    }
+    try {
+      const fp = path3.join(MDIR, fid + ".json");
+      if (fs3.existsSync(fp)) fs3.unlinkSync(fp);
+    } catch {
     }
   }
+  if (typeof queue !== "undefined" && Array.isArray(queue)) {
+    queue = queue.filter((id) => !removedIds.has(id));
+  }
+  db.fixtures = db.fixtures.filter((f) => f.comp !== FRIENDLY_COMP);
+  if (Array.isArray(db.friendlyRequests)) {
+    db.friendlyRequests = db.friendlyRequests.filter((r) => !r?.fixtureId || !removedIds.has(r.fixtureId));
+  }
+  try {
+    invalidateAgg();
+  } catch {
+  }
+  return removedIds.size;
 }
 function genSeason(start, name, opts) {
   db.settings.season = name;
@@ -16395,6 +16375,12 @@ app.post("/api/admin/friendlies/generate", admin, (req, res) => {
   const clubCount = (db.fixtures || []).filter((f) => f.comp === FRIENDLY_COMP).length;
   res.json({ ok: 1, breaks: db.internationalBreaks, nationalMatches: natCount, clubMatches: clubCount });
 });
+app.post("/api/admin/friendlies/clear", admin, (req, res) => {
+  const deletedCount = purgeAllClubFriendlies();
+  db.settings.clubFriendliesPurgedV1 = true;
+  saveNow();
+  res.json({ ok: 1, deletedCount });
+});
 app.post("/api/admin/check-squad", admin, async (req, res) => {
   const t = team(req.body.teamId);
   if (!t) return fail(res, "\u041A\u043B\u0443\u0431 \u043D\u0435 \u043D\u0430\u0439\u0434\u0435\u043D");
@@ -17251,6 +17237,12 @@ function syncRplFridaySchedules() {
 }
 syncRplFridaySchedules();
 if (ensureDualTimes()) save();
+if (!db.settings.clubFriendliesPurgedV1) {
+  const purged = purgeAllClubFriendlies();
+  db.settings.clubFriendliesPurgedV1 = true;
+  saveNow();
+  if (purged > 0) console.log(`[friendlies] Удалено товарищеских матчей: ${purged}`);
+}
 {
   const exp = expireFriendlies();
   const age2 = syncPlayerAges();

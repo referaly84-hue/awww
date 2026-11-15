@@ -10845,7 +10845,11 @@ async function pgAdmin(app) {
 <div class="small">Условия: ${e(r.conditions)}</div>
 <div class="muted small">Админ: ${appr(r.adminApproval)} · Клуб-соперник: ${r.needOpponentApproval ? appr(r.opponentApproval) : 'не требуется (не РПЛ)'}</div>`;
     ab.innerHTML = `
-      <div class="panel"><h3 style="margin:0">Заявки на товарищеские матчи (${fd.pending.length})</h3>
+      <div class="panel">
+        <div class="row sp" style="flex-wrap:wrap;gap:8px;margin-bottom:6px">
+          <h3 style="margin:0">Заявки на товарищеские матчи (${fd.pending.length})</h3>
+          <button class="btn sm" id="btn_clear_all_friendlies" style="background:#dc2626;color:#fff;font-weight:700">🗑️ Удалить все товарищеские матчи</button>
+        </div>
         <p class="muted small">Паузы на сборные: ${fd.breaks.map(b => e(b.start) + ' — ' + e(b.end)).join('; ') || 'нет'}</p>
         ${fd.pending.length ? fd.pending.map(r => `<div class="panel" style="margin-top:10px">${line(r)}
           <div class="row" style="gap:8px;margin-top:8px">
@@ -10855,6 +10859,18 @@ async function pgAdmin(app) {
       <div class="panel" style="margin-top:12px"><h3 style="margin:0">Закрытые</h3>
         ${fd.closed.length ? fd.closed.map(r => `<div class="panel" style="margin-top:8px">${line(r)}<div class="small" style="margin-top:4px">${stT[r.status] || r.status}${r.rejectReason && r.status !== 'approved' ? ' — ' + e(r.rejectReason) : ''}</div></div>`).join('') : '<div class="muted small">Пока пусто.</div>'}
       </div>`;
+    if ($('#btn_clear_all_friendlies')) $('#btn_clear_all_friendlies').onclick = () => {
+      confirmModal({
+        title: 'Удаление товарищеских матчей',
+        msg: 'Удалить все клубные товарищеские матчи из календаря и расписания?',
+        okText: '🗑️ Удалить все',
+        okStyle: 'background:#dc2626;color:#fff;font-weight:700',
+        onOk: async () => {
+          const r = await act(() => api('/admin/friendlies/clear', {}), d => `Удалено товарищеских матчей: ${d.deletedCount || 0}`);
+          if (r) re();
+        }
+      });
+    };
     ab.querySelectorAll('[data-fa-ok]').forEach(b => b.onclick = async () => { await act(() => api('/admin/friendly/resolve', { id: b.dataset.faOk, action: 'approve' }), 'Одобрено'); re(); });
     ab.querySelectorAll('[data-fa-no]').forEach(b => b.onclick = async () => { const comment = prompt('Причина отказа (необязательно):') || ''; await act(() => api('/admin/friendly/resolve', { id: b.dataset.faNo, action: 'reject', comment }), 'Отклонено'); re(); });
   }
@@ -11927,7 +11943,7 @@ async function pgNational(app) {
           <input id="nt_title" value="${e(cur.title)}" placeholder="Название паузы (например: Ноябрьский сбор 2026)" style="flex:1;min-width:240px">
           <button class="btn" id="nt_gen_ext">Сформировать расширенный (40) ИИ</button>
           <button class="btn" id="nt_gen_fin">Сформировать итоговый (25) ИИ</button>
-          <button class="btn" id="nt_gen_all_friendlies" style="background:#1d4ed8;color:#fff" title="Автоматически назначить товарищеские матчи сборной России и клубов на все 4 паузы сезона">⚡ Матчи на все паузы</button>
+          <button class="btn" id="nt_gen_all_friendlies" style="background:#1d4ed8;color:#fff" title="Автоматически назначить товарищеские матчи сборной России на все 4 паузы сезона">⚡ Матчи на все паузы</button>
           <button class="btn alt" id="nt_arch_btn">В архив</button>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-bottom:12px">
@@ -11994,7 +12010,7 @@ async function pgNational(app) {
     if (r) pgNational(app);
   };
   if ($('#nt_gen_all_friendlies')) $('#nt_gen_all_friendlies').onclick = async () => {
-    const r = await act(() => api('/admin/friendlies/generate', {}), 'Товарищеские матчи сборной и клубов назначены на все паузы сезона!');
+    const r = await act(() => api('/admin/friendlies/generate', {}), 'Товарищеские матчи сборной назначены на все паузы сезона!');
     if (r) pgNational(app);
   };
   if ($('#nt_add_btn')) $('#nt_add_btn').onclick = async () => {
