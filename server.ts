@@ -2743,7 +2743,10 @@ try {
       "name": "Точное Имя Фамилия из состава",
       "team": "home" | "away",
       "km": число (километраж игрока в этом отрезке, км),
-      "max_speed": число (максимальная скорость игрока в этом отрезке, км/ч)
+      "max_speed": число (максимальная скорость игрока в этом отрезке, км/ч),
+      "energy_loss": число (сколько % энергии игрок потратил за отрезок по реальной работе: вратарь 1–8%, пассивный защитник без нагрузки 4–10%, активный бегающий игрок 14–28%),
+      "workload": "low" | "moderate" | "high" | "very_high" (оценка реальной нагрузки: "low" если почти не двигался/стоял в воротах/в обороне без прессинга, "moderate" стандартная, "high" плотный бег и борьба, "very_high" предельная пахота),
+      "workload_note": "краткое пояснение работы игрока (например: «стоял без работы в воротах» или «прессинговал весь тайм»)"
     }
   ],
   "state_at_end": {
@@ -6271,9 +6274,18 @@ function computePlayerFatigue(tid: string, f: any) {
   const teamRecent14Count = recent14.filter((x) => x.home === tid || x.away === tid).length;
 
   const forPlayer = (pid: string) => {
+    const pObj = player(pid);
+    const pos = pObj?.pos || "";
+    const isGk = pos === "\u0412\u0420";
     let min14d = 0, min10d = 0, apps14d = 0, apps10d = 0, full10d = 0, full14d = 0, starts14d = 0, subApps14d = 0;
     let lastMatchDaysAgo: number | null = null;
     let lastMatchMin = 0;
+    let lastMatchLoss = 0;
+    let lastMatchWorkload = "";
+    let lastMatchAiEnergy = false;
+    let acutePenalty = 0;
+    let totalLoss10d = 0;
+    let totalLoss14d = 0;
     for (const x of recent14) {
       const ps = x.st?.players?.[pid];
       if (!ps || !(ps.min > 0)) continue;
@@ -6282,6 +6294,21 @@ function computePlayerFatigue(tid: string, f: any) {
       const started = ps.started !== undefined
         ? !!ps.started
         : (db.lineups?.[x.id + ":" + (ps.t || tid)]?.starters?.includes(pid) || mins >= 60);
+      const hasAiEnergy = ps.energyLoss !== void 0 && ps.energyLoss !== null && Number.isFinite(Number(ps.energyLoss));
+      let matchLoss = 0;
+      if (hasAiEnergy) {
+        matchLoss = clamp(Number(ps.energyLoss), 0, 85);
+      } else if (ps.km !== void 0 && ps.km !== null && Number.isFinite(Number(ps.km))) {
+        matchLoss = isGk ? clamp(Number(ps.km) * 1.4, 2, 12) : clamp(Number(ps.km) * 3.1, 4, 52);
+      } else {
+        const posBase = isGk ? 6 : (pos === "\u0426\u0417" ? 20 : (pos === "\u0426\u0424" || pos === "\u041D\u0410\u041F" ? 24 : 30));
+        matchLoss = +(Math.min(120, mins) / 90 * posBase).toFixed(1);
+      }
+      const remFactor = d <= 0 ? 1 : d === 1 ? 0.78 : d === 2 ? 0.55 : d === 3 ? 0.32 : d === 4 ? 0.14 : d === 5 ? 0.05 : 0;
+      acutePenalty += matchLoss * remFactor;
+      totalLoss14d += matchLoss;
+      if (d <= 10) totalLoss10d += matchLoss;
+
       apps14d++;
       min14d += mins;
       if (mins >= 70) full14d++;
@@ -6295,6 +6322,9 @@ function computePlayerFatigue(tid: string, f: any) {
       if (lastMatchDaysAgo === null || d < lastMatchDaysAgo) {
         lastMatchDaysAgo = d;
         lastMatchMin = mins;
+        lastMatchLoss = +matchLoss.toFixed(1);
+        lastMatchWorkload = ps.workloadNote || "";
+        lastMatchAiEnergy = hasAiEnergy;
       }
     }
     let consecutiveStarts = 0;
@@ -6306,61 +6336,68 @@ function computePlayerFatigue(tid: string, f: any) {
       if (started) consecutiveStarts++;
       else break;
     }
-    let level = "neutral";
-    let label = "";
-    if (full10d >= 3 || (min10d >= 240 && apps10d >= 3)) {
+    const chronicPenalty = Math.max(0, totalLoss10d - 65) * 0.22 + Math.max(0, totalLoss14d - 95) * 0.12;
+    const readiness = apps14d === 0 ? 100 : clamp(Math.round(100 - acutePenalty - chronicPenalty), 20, 100);
+
+    let level = "fresh";
+    let shortText = "\u0413\u043E\u0442\u043E\u0432";
+    let statusCode = "ready";
+    let label = "\u0441\u0432\u0435\u0436\u0438\u0439 (\u043D\u0430\u0447\u0430\u043B\u043E \u0438\u0433\u0440\u043E\u0432\u043E\u0433\u043E \u043E\u0442\u0440\u0435\u0437\u043A\u0430)";
+    const wlTail = lastMatchWorkload ? `; ${lastMatchWorkload}` : "";
+
+    if (readiness < 50) {
       level = "exhausted";
-      label = `накопленная усталость (${apps10d}-й ${full10d >= 3 ? "полный " : ""}матч за 10 дней, ${min10d} мин${consecutiveStarts >= 3 ? `, ${consecutiveStarts} игр подряд в старте` : ""}) — после 65-й минуты заметно проседает`;
-    } else if (min14d >= 240 || (consecutiveStarts >= 3 && min14d >= 180)) {
+      shortText = "\u0418\u0441\u0442\u043E\u0449\u0451\u043D";
+      statusCode = "rest";
+      label = `\u043D\u0430\u043A\u043E\u043F\u043B\u0435\u043D\u043D\u0430\u044F \u0443\u0441\u0442\u0430\u043B\u043E\u0441\u0442\u044C (-${Math.round(totalLoss10d)}% \u044D\u043D\u0435\u0440\u0433\u0438\u0438 \u0437\u0430 10 \u0434\u043D.${lastMatchDaysAgo !== null ? `, -${Math.round(lastMatchLoss)}% \u0432 \u043F\u0440\u043E\u0448\u043B\u043E\u043C \u043C\u0430\u0442\u0447\u0435${wlTail}` : ""}) \u2014 \u043F\u043E\u0441\u043B\u0435 65-\u0439 \u043C\u0438\u043D\u0443\u0442\u044B \u0437\u0430\u043C\u0435\u0442\u043D\u043E \u043F\u0440\u043E\u0441\u0435\u0434\u0430\u0435\u0442`;
+    } else if (readiness < 75) {
       level = "tired";
-      label = `высокая нагрузка (${apps14d} игр, ${min14d} мин за 14 дней${consecutiveStarts >= 3 ? `, ${consecutiveStarts} подряд в старте` : ""}) — во 2-м тайме возможен спад`;
-    } else if (lastMatchDaysAgo !== null && lastMatchDaysAgo <= 3 && lastMatchMin >= 70) {
-      level = "tired";
-      label = `неполное восстановление (${lastMatchMin} мин всего ${lastMatchDaysAgo} дн. назад, ${min14d} мин за 14 дн.)`;
-    } else if (apps14d > 0 && starts14d === 0) {
-      level = "fresh";
-      label = `свежий, выходил только на замену (${min14d} мин за ${apps14d} игр за 14 дн.)`;
+      shortText = "\u0423\u0441\u0442\u0430\u043B";
+      statusCode = "caution";
+      label = `\u0432\u044B\u0441\u043E\u043A\u0430\u044F \u043D\u0430\u0433\u0440\u0443\u0437\u043A\u0430 (${lastMatchDaysAgo !== null ? `-${Math.round(lastMatchLoss)}% \u044D\u043D\u0435\u0440\u0433\u0438\u0438 ${lastMatchDaysAgo} \u0434\u043D. \u043D\u0430\u0437\u0430\u0434${wlTail}, ` : ""}${Math.round(totalLoss14d)}% \u0437\u0430 14 \u0434\u043D.) \u2014 \u0432\u043E 2-\u043C \u0442\u0430\u0439\u043C\u0435 \u0432\u043E\u0437\u043C\u043E\u0436\u0435\u043D \u0441\u043F\u0430\u0434`;
+    } else if (readiness < 90) {
+      level = "moderate";
+      shortText = "\u0412 \u0442\u043E\u043D\u0443\u0441\u0435";
+      statusCode = "ready";
+      label = `\u0432 \u0438\u0433\u0440\u043E\u0432\u043E\u043C \u0442\u043E\u043D\u0443\u0441\u0435 (${lastMatchDaysAgo !== null ? `-${Math.round(lastMatchLoss)}% \u044D\u043D\u0435\u0440\u0433\u0438\u0438 ${lastMatchDaysAgo} \u0434\u043D. \u043D\u0430\u0437\u0430\u0434${wlTail}, ` : ""}${min14d} \u043C\u0438\u043D \u0437\u0430 14 \u0434\u043D.)`;
     } else if (apps14d === 0 && teamRecent14Count > 0) {
       level = "fresh";
-      label = `свежий, не играл в последних ${teamRecent14Count} матчах команды`;
+      shortText = "\u0413\u043E\u0442\u043E\u0432";
+      statusCode = "ready";
+      label = `\u0441\u0432\u0435\u0436\u0438\u0439, \u043D\u0435 \u0438\u0433\u0440\u0430\u043B \u0432 \u043F\u043E\u0441\u043B\u0435\u0434\u043D\u0438\u0445 ${teamRecent14Count} \u043C\u0430\u0442\u0447\u0430\u0445 \u043A\u043E\u043C\u0430\u043D\u0434\u044B`;
     } else if (apps14d > 0) {
-      level = "moderate";
-      label = `в игровом тонусе (${min14d} мин за 14 дн., без перегруза)`;
-    } else {
       level = "fresh";
-      label = "свежий (начало игрового отрезка)";
+      shortText = "\u0413\u043E\u0442\u043E\u0432";
+      statusCode = "ready";
+      label = isGk
+        ? `\u0432\u0440\u0430\u0442\u0430\u0440\u044C, \u043D\u0438\u0437\u043A\u0430\u044F \u043D\u0430\u0433\u0440\u0443\u0437\u043A\u0430 (-${Math.round(lastMatchLoss)}% \u044D\u043D\u0435\u0440\u0433\u0438\u0438 \u0432 \u043F\u0440\u043E\u0448\u043B\u043E\u043C \u043C\u0430\u0442\u0447\u0435${wlTail})`
+        : `\u0441\u0432\u0435\u0436\u0438\u0439, \u043D\u0435\u0431\u043E\u043B\u044C\u0448\u0430\u044F \u043D\u0430\u0433\u0440\u0443\u0437\u043A\u0430 (-${Math.round(lastMatchLoss)}% \u044D\u043D\u0435\u0440\u0433\u0438\u0438 \u0432 \u043F\u0440\u043E\u0448\u043B\u043E\u043C \u043C\u0430\u0442\u0447\u0435${wlTail})`;
     }
-    let penalty = 0;
-    if (lastMatchDaysAgo !== null && lastMatchDaysAgo <= 4 && lastMatchMin > 0) {
-      const recWeight = lastMatchDaysAgo <= 1 ? 28 : lastMatchDaysAgo === 2 ? 21 : lastMatchDaysAgo === 3 ? 14 : 7;
-      penalty += Math.round((Math.min(120, lastMatchMin) / 90) * recWeight);
-    }
-    penalty += Math.round(Math.max(0, min10d - 90) * 0.14);
-    penalty += Math.round(Math.max(0, min14d - 180) * 0.07);
-    if (consecutiveStarts >= 3) penalty += (consecutiveStarts - 2) * 5;
 
-    let readiness = 100;
-    let shortText = "Готов";
-    let statusCode = "ready";
-    if (level === "exhausted") {
-      readiness = Math.max(25, Math.min(48, 72 - penalty));
-      shortText = "Истощён";
-      statusCode = "rest";
-    } else if (level === "tired") {
-      readiness = Math.max(52, Math.min(73, 88 - penalty));
-      shortText = "Устал";
-      statusCode = "caution";
-    } else if (level === "moderate") {
-      readiness = Math.max(76, Math.min(89, 96 - penalty));
-      shortText = "В тонусе";
-      statusCode = "ready";
-    } else {
-      readiness = apps14d === 0 ? 100 : Math.max(90, Math.min(98, 100 - Math.round(min14d * 0.08)));
-      shortText = "Готов";
-      statusCode = "ready";
-    }
     const readyToPlay = level !== "exhausted";
-    return { level, label, readiness, readyToPlay, shortText, statusCode, min10d, min14d, apps10d, apps14d, full10d, full14d, starts14d, subApps14d, consecutiveStarts, lastMatchDaysAgo, lastMatchMin };
+    return {
+      level,
+      label,
+      readiness,
+      readyToPlay,
+      shortText,
+      statusCode,
+      min10d,
+      min14d,
+      apps10d,
+      apps14d,
+      full10d,
+      full14d,
+      starts14d,
+      subApps14d,
+      consecutiveStarts,
+      lastMatchDaysAgo,
+      lastMatchMin,
+      lastMatchLoss,
+      lastMatchAiEnergy,
+      totalLoss10d: +totalLoss10d.toFixed(1),
+      totalLoss14d: +totalLoss14d.toFixed(1)
+    };
   };
   return { forPlayer, teamRecent14Count };
 }
@@ -6382,7 +6419,7 @@ function cardLine(p, date, opts?: { slotInfo?: any; fatigueInfo?: any; roleNames
       slotTag = ` [позиция в схеме: ${opts.slotInfo.slotPos}]`;
     }
   }
-  const fatTag = opts?.fatigueInfo?.label ? ` Физическая готовность: ${opts.fatigueInfo.label}.` : "";
+  const fatTag = opts?.fatigueInfo?.label ? ` Физическая готовность перед матчем: ${opts.fatigueInfo.readiness ?? 100}% (${opts.fatigueInfo.label}).` : "";
   const rolesTag = opts?.roleNames?.length ? ` Штатные роли: ${opts.roleNames.join(", ")}.` : "";
   return `${p.pos || "\u041F\u0417"} ${p.name}${slotTag}${a ? `, ${a} \u043B\u0435\u0442` : ""}${nat}${foot}${real} \u2014 \u0441\u0442\u0438\u043B\u044C: ${p.style || "\u0441\u0431\u0430\u043B\u0430\u043D\u0441\u0438\u0440\u043E\u0432\u0430\u043D\u043D\u044B\u0439"}. \u0414\u043E\u0441\u0442\u0438\u0436\u0435\u043D\u0438\u044F: ${(p.achievements || []).join("; ") || "\u043E\u043F\u044B\u0442 \u0432\u044B\u0441\u0442\u0443\u043F\u043B\u0435\u043D\u0438\u0439"}. \u0421\u0442\u0430\u0442\u0438\u0441\u0442\u0438\u043A\u0430 2 \u0441\u0435\u0437\u043E\u043D\u043E\u0432: ${p.stats2y || "\u0440\u0435\u0433\u0443\u043B\u044F\u0440\u043D\u0430\u044F \u0438\u0433\u0440\u043E\u0432\u0430\u044F \u043F\u0440\u0430\u043A\u0442\u0438\u043A\u0430"}. \u0424\u043E\u0440\u043C\u0430: ${p.form || "\u0441\u0442\u0430\u0431\u0438\u043B\u044C\u043D\u0430\u044F"}.${seas}${fatTag}${rolesTag} \u0425\u0430\u0440\u0430\u043A\u0442\u0435\u0440: ${p.character || "\u0445\u043B\u0430\u0434\u043D\u043E\u043A\u0440\u043E\u0432\u043D\u044B\u0439, \u043A\u043E\u043C\u0430\u043D\u0434\u043D\u044B\u0439 \u0438\u0433\u0440\u043E\u043A"}. \u041D\u043E\u0432\u043E\u0441\u0442\u0438: ${p.news || "\u0433\u043E\u0442\u043E\u0432\u0438\u0442\u0441\u044F \u043A \u043C\u0430\u0442\u0447\u0443 \u0432 \u0448\u0442\u0430\u0442\u043D\u043E\u043C \u0440\u0435\u0436\u0438\u043C\u0435"}.`;
 }
@@ -6792,18 +6829,32 @@ ${lineText(ctx, "away")}
   }
   if (mode === "light") {
     u += `
-ФИЗИЧЕСКАЯ ТЕЛЕМЕТРИЯ ИГРОКОВ ЗА МАТЧ (минуты 1–90):
-В JSON добавь поле "player_stats": [{"name": "Точное Имя Фамилия", "team": "home" | "away", "km": число, "max_speed": число}] для каждого игрока обеих команд, выходившего на поле в этом матче. Учитывай позицию, сыгранные минуты (включая вышедших на замену и удалённых), темп игры, усталость и погоду (без выдуманных заглушек).
+ФИЗИЧЕСКАЯ ТЕЛЕМЕТРИЯ И ЗАТРАТА ЭНЕРГИИ ЗА МАТЧ (минуты 1–90):
+В JSON добавь поле "player_stats": [{"name": "Точное Имя Фамилия", "team": "home" | "away", "km": число, "max_speed": число, "energy_loss": число, "workload": "low" | "moderate" | "high" | "very_high", "workload_note": "краткое пояснение"}] для каждого игрока обеих команд, выходившего на поле в этом матче.
+• "km" — километраж (км), "max_speed" — макс. скорость (км/ч).
+• "workload" — индивидуальная оценка нагрузки игрока ("low" если почти стоял/без мяча/вратарь без работы, "moderate" стандартная, "high" плотный бег и прессинг, "very_high" предельная).
+• "workload_note" — короткий комментарий почему такая нагрузка.
+• "energy_loss" — сколько % энергии (0..85) потерял конкретно этот игрок по РЕАЛЬНО ПРОДЕЛАННОЙ РАБОТЕ, позиции, километражу и интенсивности действий (НЕ считай одинаково по минутам!):
+  - Вратарь (ВР) почти не бегает: в спокойном матче 2–7%, при шквале атак и серии сейвов 8–15%.
+  - Малозагруженный полевой игрок (например, ЦЗ команды с 65%+ владения, «стоял весь матч» без рывков и прессинга) тратит мало: 7–15%.
+  - Активный игрок с высоким прессингом/рывками/единоборствами тратит 28–50% (в жару/тяжёлое поле до 55–65%).
+  - Вышедшие на замену/удалённые тратят только за свои реальные действия и минуты.
 
 Сгенерируй сводку всего матча (минуты 1–90) строго в валидном JSON без markdown-обёртки: {"events":[...],"stats":{...},"player_stats":[...],"note":"..."}. Прематч и поминутная хроника не нужны.`;
     return u;
   }
   const span = b - a + 1;
   u += `
-ФИЗИЧЕСКАЯ ТЕЛЕМЕТРИЯ ИГРОКОВ ЗА ОТРЕЗОК (минуты ${a}–${b}):
-В итоговом JSON обязательно заполни поле "player_stats": [{"name": "Точное Имя Фамилия", "team": "home" | "away", "km": число, "max_speed": число}] для каждого игрока обеих команд, находившегося на поле в отрезке ${a}–${b}.
-• "km" — точный километраж (в км, например 5.34), пробежанный игроком именно за этот отрезок ${a}–${b}, строго исходя из его позиции, фактических минут на поле в этом отрезке (у вышедших на замену/удалённых — пропорционально минутам), темпа, погоды и усталости.
+ФИЗИЧЕСКАЯ ТЕЛЕМЕТРИЯ И ЗАТРАТА ЭНЕРГИИ ЗА ОТРЕЗОК (минуты ${a}–${b}):
+В итоговом JSON обязательно заполни поле "player_stats": [{"name": "Точное Имя Фамилия", "team": "home" | "away", "km": число, "max_speed": число, "energy_loss": число, "workload": "low" | "moderate" | "high" | "very_high", "workload_note": "краткое пояснение"}] для каждого игрока обеих команд, находившегося на поле в отрезке ${a}–${b}.
+• "km" — точный километраж (в км, например 5.34), пробежанный игроком именно за этот отрезок ${a}–${b}, строго исходя из его позиции, фактических минут на поле, темпа, погоды и усталости.
 • "max_speed" — максимальная скорость (в км/ч, например 32.8), достигнутая игроком в этом отрезке.
+• "workload" — нагрузка игрока именно в этом отрезке ("low" если почти не двигался/стоял без дела, "moderate" обычная, "high" активный бег и борьба, "very_high" предельная).
+• "workload_note" — краткая фраза о характере нагрузки игрока в отрезке.
+• "energy_loss" — сколько % энергии (0..60) потерял конкретно этот игрок именно в отрезке ${a}–${b} по его РЕАЛЬНОЙ РАБОТЕ на поле (НИКОГДА не ставь одинаковую усталость всем!):
+  - Вратарь (ВР): в спокойном отрезке 1–4%, под постоянными ударами и на выходах 5–9%.
+  - Защитник/игрок, который почти не двигался, не бегал в спринты и не боролся в этом отрезке: 3–9% (а при полном стоянии у своих ворот при тотальном контроле мяча командой — 2–6%).
+  - Активный полузащитник/фланг/нападающий при высоком прессинге, спринтах и дуэлях: 14–28% за тайм (и пропорционально меньше за короткий отрезок или выход на замену).
 
 Сгенерируй отрезок матча (минуты ${a}–${b}) строго в валидном JSON без markdown-обёртки по правилам промпта (раздел 10 — формат вывода). Текст каждого события держи ёмким (1–2 предложения), чтобы весь JSON гарантированно поместился в ответ целиком.`;
   u += ` Ориентир по числу игровых событий в этом отрезке: ${Math.max(12, Math.round(span / 45 * 50))}–${Math.max(22, Math.round(span / 45 * 85))}.`;
@@ -7292,8 +7343,35 @@ function fakePeriod(a, b, ctx, prev) {
   if (b >= 90) push(90, 59, "none", "fulltime", [], "Матч окончен.");
   return ev;
 }
+type PlayerTelemetry = { km?: number; maxSpeed?: number; energyLoss?: number; workload?: string; workloadNote?: string };
+var WORKLOAD_RANK: Record<string, number> = { low: 1, moderate: 2, high: 3, very_high: 4 };
+var WORKLOAD_BY_RANK = ["", "low", "moderate", "high", "very_high"];
+function normalizeWorkload(raw: any): string | undefined {
+  if (raw === void 0 || raw === null || raw === "") return void 0;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    if (raw <= 0.78) return "low";
+    if (raw <= 1.1) return "moderate";
+    if (raw <= 1.32) return "high";
+    return "very_high";
+  }
+  const s = String(raw).trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (!s) return void 0;
+  if (s === "low" || /^(низк|мал|миним|стоял|пассив|спокой|idle|passive|minimal|light)/.test(s)) return "low";
+  if (s === "moderate" || /^(средн|обыч|норм|умерен|стандарт|medium|normal|avg)/.test(s)) return "moderate";
+  if (s === "very_high" || /^(very_high|extreme|max|предельн|максим|очень_высок|запредел|критич|heavy)/.test(s)) return "very_high";
+  if (s === "high" || /^(высок|повышен|интенсив|актив|тяжел|тяжёл|active)/.test(s)) return "high";
+  return void 0;
+}
+function mergeWorkloadLevel(a?: string, b?: string): string | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const ra = WORKLOAD_RANK[a] || 2;
+  const rb = WORKLOAD_RANK[b] || 2;
+  const avg = Math.round((ra + rb * 1.15) / 2.15);
+  return WORKLOAD_BY_RANK[clamp(avg, 1, 4)] || b;
+}
 function parseAiPlayerStats(rawStats: any, ctx: any) {
-  const out: Record<string, { km?: number; maxSpeed?: number }> = {};
+  const out: Record<string, PlayerTelemetry> = {};
   if (!rawStats || !ctx) return out;
   const idx = indexNames(ctx);
   const items: any[] = Array.isArray(rawStats)
@@ -7310,34 +7388,51 @@ function parseAiPlayerStats(rawStats: any, ctx: any) {
     if (!pid) continue;
     const rawKm = item.km ?? item.distance ?? item.distance_km ?? item.distanceKm;
     const rawSpd = item.max_speed ?? item.maxSpeed ?? item.top_speed ?? item.topSpeed ?? item.speed;
+    const rawEl = item.energy_loss ?? item.energyLoss ?? item.energy_spent ?? item.energySpent ?? item.fatigue_loss ?? item.fatigue ?? item.tiredness;
+    const rawWl = item.workload ?? item.load ?? item.intensity ?? item.workload_level ?? item.workloadLevel ?? item.effort ?? item["нагрузка"];
+    const rawWlNote = item.workload_note ?? item.workloadNote ?? item.load_note ?? item.loadNote ?? item.comment ?? item.note ?? item["пояснение_нагрузки"];
     const kmNum = rawKm !== void 0 && rawKm !== null && rawKm !== "" ? Number(String(rawKm).replace(",", ".")) : Number.NaN;
     const spdNum = rawSpd !== void 0 && rawSpd !== null && rawSpd !== "" ? Number(String(rawSpd).replace(",", ".")) : Number.NaN;
-    const entry: { km?: number; maxSpeed?: number } = {};
+    const elNum = rawEl !== void 0 && rawEl !== null && rawEl !== "" ? Number(String(rawEl).replace(",", ".").replace("%", "")) : Number.NaN;
+    const wl = normalizeWorkload(rawWl);
+    const wlNote = rawWlNote !== void 0 && rawWlNote !== null ? String(rawWlNote).trim().slice(0, 120) : "";
+    const entry: PlayerTelemetry = {};
     if (Number.isFinite(kmNum) && kmNum >= 0 && kmNum <= 22) {
       entry.km = +kmNum.toFixed(2);
     }
     if (Number.isFinite(spdNum) && spdNum >= 5 && spdNum <= 45) {
       entry.maxSpeed = +spdNum.toFixed(1);
     }
-    if (entry.km !== void 0 || entry.maxSpeed !== void 0) {
+    if (Number.isFinite(elNum) && elNum >= 0 && elNum <= 100) {
+      entry.energyLoss = +clamp(elNum, 0, 85).toFixed(1);
+    }
+    if (wl) entry.workload = wl;
+    if (wlNote) entry.workloadNote = wlNote;
+    if (entry.km !== void 0 || entry.maxSpeed !== void 0 || entry.energyLoss !== void 0 || entry.workload !== void 0 || entry.workloadNote !== void 0) {
       const prev = out[pid];
       if (!prev) out[pid] = entry;
       else {
         if (entry.km !== void 0) prev.km = +((prev.km || 0) + entry.km).toFixed(2);
         if (entry.maxSpeed !== void 0) prev.maxSpeed = +Math.max(prev.maxSpeed || 0, entry.maxSpeed).toFixed(1);
+        if (entry.energyLoss !== void 0) prev.energyLoss = +clamp((prev.energyLoss || 0) + entry.energyLoss, 0, 85).toFixed(1);
+        if (entry.workload) prev.workload = mergeWorkloadLevel(prev.workload, entry.workload);
+        if (entry.workloadNote) prev.workloadNote = entry.workloadNote;
       }
     }
   }
   return out;
 }
-function mergeAiPlayerStats(a: Record<string, { km?: number; maxSpeed?: number }> | undefined, b: Record<string, { km?: number; maxSpeed?: number }> | undefined) {
-  const res: Record<string, { km?: number; maxSpeed?: number }> = {};
+function mergeAiPlayerStats(a: Record<string, PlayerTelemetry> | undefined, b: Record<string, PlayerTelemetry> | undefined) {
+  const res: Record<string, PlayerTelemetry> = {};
   for (const src of [a, b]) {
     if (!src) continue;
     for (const [pid, v] of Object.entries(src)) {
       const cur = res[pid] ||= {};
       if (v.km !== void 0) cur.km = +((cur.km || 0) + v.km).toFixed(2);
       if (v.maxSpeed !== void 0) cur.maxSpeed = +Math.max(cur.maxSpeed || 0, v.maxSpeed).toFixed(1);
+      if (v.energyLoss !== void 0) cur.energyLoss = +clamp((cur.energyLoss || 0) + v.energyLoss, 0, 85).toFixed(1);
+      if (v.workload) cur.workload = mergeWorkloadLevel(cur.workload, v.workload);
+      if (v.workloadNote) cur.workloadNote = v.workloadNote;
     }
   }
   return res;
@@ -7377,7 +7472,7 @@ var LIGHT_SYS_ADD = `
 Это матч нижней лиги: поминутная хроника, прематч (раздел 0) и послематчевые реплики не нужны. Учитывай ВСЕ те же данные и правила (составы, форма, тренеры, схемы, погода, газон, судьи, мотивация, турнирное положение), но верни только итог одним JSON: {"events":[...],"stats":{...},"player_stats":[...],"note":"..."}.
 events — только значимые события всего матча (минуты 1–90): все голы и автоголы (players: [автор, ассистент, если есть]), пенальти, жёлтые и красные карточки, травмы, замены, ошибки судьи/VAR. Не более 30 событий, text — одна короткая строка. Поля min/sec/team/type/players/text — как в разделе 10. Никаких pass/dribble/shot/save/possession.
 stats — {"home":{"shots":int,"shots_on_target":int,"xg":число,"corners":int,"fouls":int,"offsides":int,"tackles":int,"possession":int},"away":{...}}. Цифры согласованы с событиями: удары в створ не меньше голов, удары не меньше ударов в створ, фолов не меньше карточек, владение двух команд в сумме 100.
-player_stats — [{"name":"Точное Имя Фамилия","team":"home"|"away","km":число,"max_speed":число}] для каждого игрока обеих команд, выходившего на поле.
+player_stats — [{"name":"Точное Имя Фамилия","team":"home"|"away","km":число,"max_speed":число,"energy_loss":число,"workload":"low"|"moderate"|"high"|"very_high","workload_note":"кратко почему"}] для каждого игрока обеих команд, выходившего на поле (energy_loss — % потраченной энергии по реальной нагрузке: вратарь 2–12%, пассивный защитник 7–16%, активный полевой 28–50%).
 note — одно предложение об игре. Счёт движок считает по событиям goal/own_goal.`;
 async function genLight(ctx) {
   if (!hasLLM()) return { events: fakePeriod(1, 90, ctx, []), stats: null, playerStats: {}, note: "", fallback: true };
@@ -7430,27 +7525,167 @@ function applyLightStats(st, ls, ctx) {
   const ph = n(ls.home?.possession, 25, 75);
   if (ph !== null) st.poss = [ph, 100 - ph];
 }
-function computeStats(events, ctx, periodTelemetry: any = null) {
+function getPosEnergyProfile(posCode: string) {
+  const code = normPosCode(posCode);
+  if (code === "\u0412\u0420") return { code, base90: 5.5, expKm90: 4.5, maxCap: 16, expActs90: 5.5 };
+  if (code === "\u0426\u0417") return { code, base90: 17.5, expKm90: 9.4, maxCap: 46, expActs90: 10.0 };
+  if (code === "\u0426\u0424") return { code, base90: 21.5, expKm90: 9.8, maxCap: 54, expActs90: 11.5 };
+  if (code === "\u041B\u0417" || code === "\u041F\u0417") return { code, base90: 27.5, expKm90: 10.8, maxCap: 66, expActs90: 12.0 };
+  if (code === "\u041E\u041F" || code === "\u0426\u041F" || code === "\u0410\u041F") return { code, base90: 27.0, expKm90: 11.2, maxCap: 66, expActs90: 13.5 };
+  if (code === "\u041B\u041F" || code === "\u041F\u041F" || code === "\u041B\u0412" || code === "\u041F\u0412") return { code, base90: 28.5, expKm90: 10.9, maxCap: 68, expActs90: 12.5 };
+  return { code, base90: 25.0, expKm90: 10.4, maxCap: 62, expActs90: 12.0 };
+}
+function parseWeatherFatigueFactor(weatherStr: any) {
+  const txt = String(weatherStr || "").toLowerCase();
+  let factor = 1.0;
+  const tmMatch = txt.match(/(-?\d+)\s*°/);
+  if (tmMatch) {
+    const temp = Number(tmMatch[1]);
+    if (Number.isFinite(temp)) {
+      if (temp >= 27) factor += clamp((temp - 25) * 0.014, 0, 0.16);
+      else if (temp <= -5) factor += 0.05;
+    }
+  }
+  if (/(\u0434\u043E\u0436\u0434|\u043B\u0438\u0432\u0435\u043D|\u0441\u043D\u0435\u0433|\u043C\u043E\u043A\u0440|\u0433\u0440\u044F\u0437|\u0442\u044F\u0436\u0451\u043B|\u0442\u044F\u0436\u0435\u043B)/.test(txt)) factor += 0.08;
+  return factor;
+}
+function computePlayerEnergyLoss(
+  pid: string,
+  x: any,
+  effMin: number,
+  ctx: any,
+  actScoreVal: number,
+  teamsStats: any,
+  poss: number[],
+  weatherFactor: number,
+  hasFullEvents: boolean,
+  aiEnergyLoss: number | undefined,
+  aiEnergyFromPost: boolean,
+  workload: string | undefined,
+  liveRatio: number
+) {
+  const rawPos = ctx?.pos?.[pid] || "\u0426\u041F";
+  const slotPos = ctx?.slotPos?.[pid] || rawPos;
+  const prof = getPosEnergyProfile(slotPos);
+  const isGk = prof.code === "\u0412\u0420";
+  const minFrac = clamp(effMin / 90, 0.03, 1.35);
+
+  let kmFactor = 1.0;
+  if (x.km !== void 0 && Number.isFinite(Number(x.km))) {
+    const expKm = Math.max(0.25, prof.expKm90 * minFrac);
+    kmFactor = clamp(Number(x.km) / expKm, 0.42, 1.48);
+  }
+
+  let actFactor = 1.0;
+  if (hasFullEvents) {
+    const actsPer90 = actScoreVal / Math.max(0.18, minFrac);
+    actFactor = clamp(0.68 + (actsPer90 / prof.expActs90) * 0.34, 0.66, 1.38);
+  } else {
+    actFactor = clamp(0.84 + ((x.g || 0) + (x.a || 0)) * 0.06 + (x.sh || 0) * 0.04 + (x.tk || 0) * 0.05 + (x.sv || 0) * 0.06, 0.78, 1.32);
+  }
+
+  let speedFactor = 1.0;
+  if (!isGk && x.maxSpeed !== void 0 && Number.isFinite(Number(x.maxSpeed))) {
+    const spd = Number(x.maxSpeed);
+    if (spd >= 30.5) speedFactor += clamp((spd - 30.5) * 0.025, 0, 0.16);
+    else if (spd < 27) speedFactor -= clamp((27 - spd) * 0.02, 0, 0.08);
+  }
+
+  const mySide = x.side === "away" ? "away" : "home";
+  const oppSide = mySide === "home" ? "away" : "home";
+  const teamPoss = mySide === "home" ? (poss[0] ?? 50) : (poss[1] ?? 50);
+  let possFactor = 1.0;
+  if (isGk) {
+    const oppSot = teamsStats?.[oppSide]?.sot || 0;
+    const sv = x.sv || 0;
+    if (sv === 0 && oppSot <= 2) possFactor = 0.64;
+    else if (sv >= 3 || oppSot >= 5) possFactor = 1 + clamp((sv * 0.14 + Math.max(0, oppSot - 3) * 0.06), 0, 0.65);
+  } else {
+    if (teamPoss < 45) possFactor += clamp((45 - teamPoss) * 0.008, 0, 0.14);
+    else if (teamPoss > 60 && (prof.code === "\u0426\u0417" || prof.code === "\u041E\u041F")) possFactor -= clamp((teamPoss - 60) * 0.006, 0, 0.1);
+  }
+
+  const normWl = normalizeWorkload(workload);
+  const wlMult = normWl === "low" ? 0.56 : normWl === "moderate" ? 0.97 : normWl === "high" ? 1.22 : normWl === "very_high" ? 1.42 : 1.0;
+  const effWeather = isGk ? 1 + (weatherFactor - 1) * 0.25 : weatherFactor;
+
+  const minFloor = isGk ? 1 : 2;
+  const modelLoss = clamp(prof.base90 * minFrac * kmFactor * actFactor * speedFactor * possFactor * effWeather * wlMult, minFloor, prof.maxCap);
+
+  let finalLoss = modelLoss;
+  if (aiEnergyLoss !== void 0 && Number.isFinite(aiEnergyLoss)) {
+    const scaledAi = aiEnergyFromPost ? aiEnergyLoss : aiEnergyLoss * liveRatio;
+    let clampedAi = clamp(scaledAi, minFloor, prof.maxCap);
+    if (normWl === "low") {
+      clampedAi = Math.min(clampedAi, prof.base90 * minFrac * 0.88);
+    }
+    const aiWeight = aiEnergyFromPost ? 0.6 : 0.52;
+    finalLoss = clampedAi * aiWeight + modelLoss * (1 - aiWeight);
+  }
+
+  let resolvedWl = normWl;
+  if (!resolvedWl) {
+    const rel = kmFactor * actFactor * possFactor;
+    resolvedWl = rel < 0.78 ? "low" : rel < 1.12 ? "moderate" : rel < 1.32 ? "high" : "very_high";
+  }
+
+  return {
+    energyLoss: +clamp(finalLoss, minFloor, prof.maxCap).toFixed(1),
+    workload: resolvedWl
+  };
+}
+function computeStats(events, ctx, periodTelemetry: any = null, postWorkload: any = null) {
   const mk = () => ({ g: 0, sh: 0, sot: 0, xg: 0, fo: 0, co: 0, yc: 0, rc: 0, tk: 0, sv: 0, off: 0, penF: 0, penA: 0, refF: 0, refA: 0, sub: 0 });
-  const t = { home: mk(), away: mk() }, P = {}, posT = { home: 0, away: 0 };
+  const t = { home: mk(), away: mk() }, P: Record<string, any> = {}, posT = { home: 0, away: 0 };
   const pl = (pid) => {
     if (!pid) return {};
-    return P[pid] ||= { id: pid, n: ctx.names[pid], t: ctx.pidTeam[pid], side: ctx.pidSide[pid], min: 0, g: 0, a: 0, yc: 0, rc: 0, tk: 0, sv: 0, sh: 0, xg: 0, ff: 0, fa: 0, cs: 0 };
+    return P[pid] ||= { id: pid, n: ctx.names[pid], t: ctx.pidTeam[pid], side: ctx.pidSide[pid], min: 0, g: 0, a: 0, yc: 0, rc: 0, tk: 0, sv: 0, sh: 0, xg: 0, ff: 0, fa: 0, cs: 0, acts: 0 };
   };
-  const start = {}, end = {}, subbedInPids = /* @__PURE__ */ new Set();
+  const start: Record<string, number> = {}, end: Record<string, number> = {}, subbedInPids = /* @__PURE__ */ new Set();
   for (const s of ["home", "away"]) {
     for (const pid of ctx.lineup[s].starters) start[pid] = 0;
   }
   const ftEv = events.find((x) => x.type === "fulltime");
   const lastMin = ftEv ? Math.max(90, ftEv.min) : events.length ? Math.max(90, events[events.length - 1].min) : 90;
   const playT = /* @__PURE__ */ new Set(["possession", "pass", "dribble", "tackle", "shot", "corner", "freekick", "save", "miss", "post", "goal", "penalty", "offside"]);
-  let open = null;
+  let open: any = null;
+  const actScore: Record<string, number> = {};
+  const actCount: Record<string, number> = {};
+  const addAct = (pid: string | undefined, weight: number) => {
+    if (!pid) return;
+    actScore[pid] = (actScore[pid] || 0) + weight;
+    actCount[pid] = (actCount[pid] || 0) + 1;
+  };
   events.forEach((e, i) => {
     const s = e.team, o = s === "home" ? "away" : "home", ok = s === "home" || s === "away", T = ok ? t[s] : null, To = ok ? t[o] : null;
     if (ok && playT.has(e.type) && events[i + 1]) T && (posT[s] += clamp(events[i + 1].min * 60 + events[i + 1].sec - (e.min * 60 + e.sec), 0, 75));
     const p0 = e.pids?.[0], p1 = e.pids?.[1];
     switch (e.type) {
+      case "pass":
+        addAct(p0, 0.45);
+        addAct(p1, 0.4);
+        break;
+      case "possession":
+        addAct(p0, 0.55);
+        addAct(p1, 0.3);
+        break;
+      case "dribble":
+        addAct(p0, 1.25);
+        addAct(p1, 0.45);
+        break;
+      case "duel":
+        addAct(p0, 1.3);
+        addAct(p1, 1.15);
+        break;
+      case "highlight":
+        addAct(p0, 0.85);
+        addAct(p1, 0.5);
+        break;
+      case "freekick":
+        addAct(p0, 0.65);
+        break;
       case "shot":
+        addAct(p0, 1.15);
         if (ok) {
           T.sh++;
           T.xg += e.xg || 0.08;
@@ -7463,12 +7698,15 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         }
         break;
       case "penalty":
+        addAct(p0, 0.8);
         if (ok) {
           T.penF++;
           To.penA++;
         }
         break;
       case "goal":
+        addAct(p0, 1.25);
+        addAct(p1, 0.9);
         if (ok) {
           T.g++;
           T.sot++;
@@ -7485,9 +7723,12 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         open = null;
         break;
       case "own_goal":
+        addAct(p0, 0.8);
         if (ok) T.g++;
         break;
       case "save":
+        addAct(p0, 1.85);
+        addAct(p1, 0.6);
         if (ok) {
           T.sv++;
           if (!open) {
@@ -7502,6 +7743,7 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         break;
       case "miss":
       case "post":
+        addAct(p0, 0.75);
         if (ok && !open) {
           T.sh++;
           T.xg += 0.05;
@@ -7510,6 +7752,8 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         open = null;
         break;
       case "foul":
+        addAct(p0, 0.95);
+        addAct(p1, 0.75);
         if (ok) {
           T.fo++;
           if (p0) pl(p0).ff++;
@@ -7532,12 +7776,16 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         }
         break;
       case "corner":
+        addAct(p0, 0.65);
         if (ok) T.co++;
         break;
       case "offside":
+        addAct(p0, 0.65);
         if (ok) T.off++;
         break;
       case "tackle":
+        addAct(p0, 1.45);
+        addAct(p1, 0.85);
         if (ok) {
           T.tk++;
           if (p0) pl(p0).tk++;
@@ -7566,6 +7814,7 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
     const rawMin = Math.max(0, (end[pid] ?? lastMin) - start[pid]);
     x.min = subbedInPids.has(pid) ? Math.max(1, rawMin) : rawMin;
     x.started = !subbedInPids.has(pid) && start[pid] === 0;
+    x.acts = actCount[pid] || 0;
   }
   for (const side of ["home", "away"]) {
     const conc = t[side === "home" ? "away" : "home"].g;
@@ -7575,10 +7824,13 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
       }
     }
   }
+  const isFinished = !!ftEv;
+  const curEvMin = events.length ? Math.max(1, events[events.length - 1].min) : 1;
+  const segAiEnergy: Record<string, number> = {};
+  const segWorkload: Record<string, string> = {};
+  const segWorkloadNote: Record<string, string> = {};
   const teleArr = Array.isArray(periodTelemetry) ? periodTelemetry : [];
   if (teleArr.length) {
-    const isFinished = !!ftEv;
-    const curEvMin = events.length ? Math.max(0, events[events.length - 1].min) : 0;
     for (const seg of teleArr) {
       if (!seg || !seg.players) continue;
       const segA = Number(seg.a || 1);
@@ -7594,6 +7846,11 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
         if (tele.maxSpeed !== void 0 && Number.isFinite(Number(tele.maxSpeed))) {
           x.maxSpeed = +Math.max(x.maxSpeed || 0, Number(tele.maxSpeed)).toFixed(1);
         }
+        if (tele.energyLoss !== void 0 && Number.isFinite(Number(tele.energyLoss))) {
+          segAiEnergy[pid] = (segAiEnergy[pid] || 0) + Number(tele.energyLoss) * ratio;
+        }
+        if (tele.workload) segWorkload[pid] = mergeWorkloadLevel(segWorkload[pid], tele.workload) || tele.workload;
+        if (tele.workloadNote) segWorkloadNote[pid] = String(tele.workloadNote).trim();
       }
     }
   }
@@ -7602,6 +7859,39 @@ function computeStats(events, ctx, periodTelemetry: any = null) {
   const tot = posT.home + posT.away || 1;
   const poss = [Math.round(posT.home / tot * 100)];
   poss.push(100 - poss[0]);
+
+  const postMap = isFinished && postWorkload && typeof postWorkload === "object" ? postWorkload : null;
+  const weatherFactor = parseWeatherFatigueFactor(ctx?.weather);
+  const hasFullEvents = events.length >= 18;
+  const liveRatio = isFinished ? 1 : clamp(curEvMin / Math.max(1, lastMin), 0.05, 1);
+
+  for (const [pid, x] of Object.entries(P)) {
+    if (!(x.min > 0)) continue;
+    const pRec = postMap?.[pid];
+    const effMin = isFinished ? x.min : clamp(Math.min(x.min, Math.max(1, curEvMin - (start[pid] || 0))), 1, x.min);
+    const aiEl = pRec?.energyLoss !== void 0 ? Number(pRec.energyLoss) : segAiEnergy[pid];
+    const wl = pRec?.workload || segWorkload[pid];
+    const wlNote = pRec?.workloadNote || segWorkloadNote[pid];
+    const calc = computePlayerEnergyLoss(
+      pid,
+      x,
+      effMin,
+      ctx,
+      actScore[pid] || 0,
+      t,
+      poss,
+      weatherFactor,
+      hasFullEvents,
+      aiEl,
+      pRec?.energyLoss !== void 0,
+      wl,
+      liveRatio
+    );
+    x.energyLoss = calc.energyLoss;
+    x.workload = calc.workload;
+    if (wlNote) x.workloadNote = wlNote;
+  }
+
   return { teams: t, players: P, poss };
 }
 var live = {};
@@ -7702,6 +7992,40 @@ function pumpQ() {
     });
   }
 }
+async function evaluatePostMatchWorkload(events: any[], ctx: any, preStats: any, score: number[]) {
+  try {
+    if (!hasLLM() || !events?.length || !preStats?.players) return null;
+    const H = ctx.sides.home.name, A = ctx.sides.away.name;
+    const activePlayers = Object.values(preStats.players).filter((p: any) => p.min > 0) as any[];
+    if (!activePlayers.length) return null;
+    const rows = activePlayers.map((p: any) => {
+      const sideNm = p.side === "home" ? H : A;
+      const pos = ctx.slotPos?.[p.id] || ctx.pos?.[p.id] || "\u0426\u041F";
+      return `- ${p.n} (${sideNm}, ${p.side}, ${pos}, ${p.min}'${p.started ? "" : " \u0437\u0430\u043C."}, \u043A\u043C: ${p.km ?? "\u2014"}, \u043C\u0430\u043A\u0441.\u0441\u043A: ${p.maxSpeed ?? "\u2014"}, \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0439: ${p.acts || 0}, \u0443\u0434: ${p.sh}, \u043E\u0442\u0431: ${p.tk}, \u0441\u0435\u0439\u0432\u044B: ${p.sv}, \u0444\u043E\u043B\u044B: ${p.ff}/${p.fa})`;
+    }).join("\n");
+    const sys = `Ты — футбольный физиотерапевт и аналитик РПЛ. По итогам завершённого матча оцени реальную индивидуальную нагрузку (workload) и трату выносливости каждого игрока строго по его позиции, пройденному расстоянию (км), количеству действий/единоборств на поле, владению мячом команды и погоде.
+Верни строго валидный JSON без markdown-обёртки:
+{"players":[{"name":"Точное Имя Фамилия","team":"home"|"away","workload":"low"|"moderate"|"high"|"very_high","workload_note":"кратко почему (например: стоял без работы в воротах / почти не двигался / прессинговал весь матч)","energy_loss":число}]}`;
+    const user = `Матч: ${H} ${score[0]}:${score[1]} ${A} | ${ctx.comp} | Погода: ${ctx.weather || "стандартная"}
+Владение мячом: ${H} ${preStats.poss?.[0] ?? 50}% — ${A} ${preStats.poss?.[1] ?? 50}%
+Удары (в створ): ${H} ${preStats.teams?.home?.sh || 0} (${preStats.teams?.home?.sot || 0}) — ${A} ${preStats.teams?.away?.sh || 0} (${preStats.teams?.away?.sot || 0})
+
+Игроки, выходившие на поле:
+${rows}
+
+Правила оценки:
+- НЕ ставь одинаковый расход энергии всем!
+- Вратарь (ВР): почти не бегает (в спокойной игре без сейвов workload="low", energy_loss 2–6%; при шквале ударов и 4+ сейвах — moderate/high, 8–15%).
+- Если защитник или форвард мало пробежал, имел мало действий и фактически «стоял весь матч» — ставь workload="low" и низкую потерю выносливости (6–14%).
+- Игроки, которые тащили прессинг, бегали флангами, много боролись и набегали высокий километраж — workload="high" или "very_high" (30–56%).`;
+    const r = await llmJSON(sys, user, { task: "workload", temp: 0.35, max: 5500 });
+    const parsed = parseAiPlayerStats(r?.players || r?.player_stats || r, ctx);
+    return Object.keys(parsed).length ? parsed : null;
+  } catch (err: any) {
+    console.warn("evaluatePostMatchWorkload skipped:", err?.message || err);
+    return null;
+  }
+}
 async function runMatch(id, opts = {}) {
   const f = fx(id);
   if (!f) return;
@@ -7739,11 +8063,17 @@ async function runMatch(id, opts = {}) {
       }
       events.forEach((e, i) => e.i = i);
       const [h, a] = rescore(events);
+      let postWorkload: any = null;
+      if (!fallback && hasLLM() && store.calls < store.cap) {
+        const preStats = computeStats(events, ctx, periodTelemetry);
+        if (light && lightStats) applyLightStats(preStats, lightStats, ctx);
+        postWorkload = await evaluatePostMatchWorkload(events, ctx, preStats, [h, a]);
+      }
       f.aiCalls = store.calls;
       f.err = "";
       f.autoRetries = 0;
       f.autoRetryAt = 0;
-      putMatch(id, { events, ctx, fallback, light, lightStats, periodTelemetry });
+      putMatch(id, { events, ctx, fallback, light, lightStats, periodTelemetry, postWorkload });
       f.final = [h, a];
       f.hg = 0;
       f.ag = 0;
@@ -7836,7 +8166,7 @@ function finish(id) {
   const f = fx(id), m = getMatch(id);
   f.hg = f.final[0];
   f.ag = f.final[1];
-  f.st = computeStats(m.events, m.ctx, m.periodTelemetry);
+  f.st = computeStats(m.events, m.ctx, m.periodTelemetry, m.postWorkload);
   if (m.light) applyLightStats(f.st, m.lightStats, m.ctx);
   m.stats = f.st;
   const HName = tn(f.home), AName = tn(f.away);
@@ -9967,6 +10297,8 @@ var pubFx = (f) => {
     awayName: tn(f.away),
     homeLogo: teamLogo(f.home),
     awayLogo: teamLogo(f.away),
+    homeColors: getTeamColors(tn(f.home)),
+    awayColors: getTeamColors(tn(f.away)),
     status: f.status,
     hg: f.hg,
     ag: f.ag,
@@ -10310,7 +10642,7 @@ app.get("/api/match/:id", (req, res) => {
   let ratingsList: any[] = [];
   if (m && (f.status === "live" || f.status === "done")) {
     const evSlice = f.status === "live" ? m.events.slice(0, f.pos) : m.events;
-    const stObj = f.status === "done" ? (m.stats || f.st || computeStats(evSlice, m.ctx, m.periodTelemetry)) : computeStats(evSlice, m.ctx, m.periodTelemetry);
+    const stObj = f.status === "done" ? (m.stats || f.st || computeStats(evSlice, m.ctx, m.periodTelemetry, m.postWorkload)) : computeStats(evSlice, m.ctx, m.periodTelemetry);
     ratingsList = f.status === "done" && hasStoredRatings
       ? m.ratings
       : computeMatchRatings({ ...m, events: evSlice, stats: stObj }, f, HName, AName);
@@ -10336,7 +10668,7 @@ app.get("/api/match/:id", (req, res) => {
   };
   if (m && (f.status === "live" || f.status === "done")) {
     out.events = f.status === "live" ? m.events.slice(0, f.pos) : m.events;
-    out.stats = f.status === "done" ? (m.stats || computeStats(out.events, m.ctx, m.periodTelemetry)) : computeStats(out.events, m.ctx, m.periodTelemetry);
+    out.stats = f.status === "done" ? (m.stats || computeStats(out.events, m.ctx, m.periodTelemetry, m.postWorkload)) : computeStats(out.events, m.ctx, m.periodTelemetry);
     const show = isAdm || f.status === "done" || f.status === "live";
     if (m.ctx?.lineup) {
       out.lineups = {};

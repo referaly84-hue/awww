@@ -305,6 +305,7 @@ a.fxl{color:inherit}a.fxl:hover{background:var(--soft);text-decoration:none}
 .ev.key{background:#fff8d8;border-left:4px solid var(--yellow);padding-left:8px}
 .ev.goal{background:#e3f4e8;border-left:4px solid var(--green2);padding-left:8px;font-weight:600}
 .ev.red{background:#fde8e6;border-left:4px solid var(--red);padding-left:8px}
+.ev.active-3d{outline:2px solid #f0c419;outline-offset:-2px;background:#fefce8}
 .ev .pl{font-size:12.5px;color:var(--muted)}
 .bar2{display:grid;grid-template-columns:54px 1fr 54px;gap:10px;align-items:center;margin:9px 0}
 .bar2 .v{font-weight:700}.bar2 .v:last-child{text-align:right}
@@ -2091,6 +2092,9 @@ window.addEventListener('hashchange', (ev) => {
 function route() {
   if (S.es) { S.es.close(); S.es = null; }
   const [, page, a, b] = (location.hash || '#/').split('/');
+  if (page !== 'match' && window.Match3D) {
+    try { window.Match3D.destroy(); } catch {}
+  }
   const app = $('#app');
   scrollTo(0, 0);
   const R = { '': pgHome, undefined: pgHome, table: pgTable, fixtures: pgFixtures, match: pgMatch, draw: pgDraw, leaders: pgLeaders, national: pgNational, insider: (app) => { location.hash = '#/'; return pgHome(app); }, esk: (app) => { location.hash = '#/'; return pgHome(app); }, weather: (app, a, b) => { if (S.me?.role !== 'admin') { location.hash = '#/'; return pgHome(app); } return pgWeather(app, a, b); }, regulations: pgHome, club: pgClub, admin: pgAdmin, login: pgLogin, team: pgTeamStats };
@@ -3525,6 +3529,7 @@ ${motm && motmPlayer ? `
   <div style="margin-top:8px;font-size:13.5px;color:var(--ink)">${e(motm.headline || motm.interview?.headline || '')}</div>
 </div>` : ''}
 <div class="tabs" id="mt">${[['live', 'Трансляция'], ['stats', 'Статистика'], ['lineups', 'Составы'], ['h2h', 'Последние встречи'], ...(motm || f.status === 'done' ? [['interview', 'Интервью и MOTM']] : []), ...(S.me?.role === 'admin' ? [['admin', 'Админ']] : [])].map(([k, t]) => `<button data-k="${k}" class="${k === mtab ? 'on' : ''}">${t}</button>`).join('')}</div>
+<div id="match3d-section" style="display:none"></div>
 <div id="mbody"></div>`;
 
   const bBack = app.querySelector('#btn-back');
@@ -3571,21 +3576,57 @@ function paintMatch() {
   $('#sc') && ($('#sc').textContent = f.hg == null ? '—' : f.hg + ' : ' + f.ag);
   const b = $('#mbody');
   if (!b) return;
+  const m3dHost = $('#match3d-section');
+
+  const syncMatch3D = () => {
+    if (!m3dHost) return;
+    const canShow3d = mtab === 'live' && (f.status === 'live' || f.status === 'done') && evs.length > 0;
+    if (!canShow3d) {
+      m3dHost.style.display = 'none';
+      if (window.Match3D) window.Match3D.setPausedIfHidden(true);
+      return;
+    }
+    m3dHost.style.display = '';
+    const onActiveEv = (evIdx) => {
+      document.querySelectorAll('#mbody .ev.active-3d').forEach(el => el.classList.remove('active-3d'));
+      const hit = document.querySelector(`#mbody .ev[data-ev-i="${evIdx}"]`);
+      if (hit) hit.classList.add('active-3d');
+    };
+    if (window.Match3D) {
+      window.Match3D.setPausedIfHidden(false);
+      window.Match3D.mount(m3dHost, M, evs, { onActiveEvent: onActiveEv });
+    } else if (!window.__m3dLoading) {
+      window.__m3dLoading = true;
+      import('/src/match3d/index.ts').then(() => {
+        window.__m3dLoading = false;
+        if (mtab === 'live' && $('#match3d-section') === m3dHost && window.Match3D) {
+          window.Match3D.mount(m3dHost, M, evs, { onActiveEvent: onActiveEv });
+        }
+      }).catch(() => { window.__m3dLoading = false; });
+    }
+  };
+  syncMatch3D();
 
   if (mtab === 'live') {
     if (!evs.length) {
       b.innerHTML = `<div class="empty panel">${f.status === 'scheduled' ? 'Трансляция начнётся, когда матч будет запущен.' : 'Ждём первые события…'}</div>`;
       return;
     }
-    b.innerHTML = '<div class="panel">' + [...evs].reverse().map(x => {
+    b.innerHTML = '<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap"><span style="font-weight:700;font-size:13.5px;color:var(--deep)">Хроника матча</span><span class="muted small">Нажмите на любое событие, чтобы перейти к моменту в 3D</span></div>' + [...evs].reverse().map(x => {
       const cls = x.type === 'goal' || x.type === 'own_goal' ? 'goal' : x.type === 'red' ? 'red' : ['yellow', 'injury', 'penalty', 'var', 'ref_error', 'highlight', 'incident', 'halftime', 'fulltime'].includes(x.type) ? 'key' : '';
       const tLogo = x.team === 'home' ? (f.homeLogo || teamLogo(f.home)) : (x.team === 'away' ? (f.awayLogo || teamLogo(f.away)) : null);
-      return `<div class="ev ${cls}">
+      return `<div class="ev ${cls}" data-ev-i="${x.i}" style="cursor:pointer" title="Показать этот момент на 3D-поле">
         <div class="m">${x.min < 0 ? 'до матча' : fmtEvT(x)}</div>
         <div>${tLogo ? `<img class="t-logo" src="${tLogo}" alt=""/>` : (EVI[x.type] || '·')}</div>
         <div>${e(x.text)}${cls && x.players?.length ? `<div class="pl">${e(x.players.join(', '))}</div>` : ''}${x.type === 'goal' || x.type === 'own_goal' ? `<div class="pl"><b>${x.score[0]}:${x.score[1]}</b></div>` : ''}</div>
       </div>`;
     }).join('') + '</div>';
+    b.querySelectorAll('.ev[data-ev-i]').forEach(row => {
+      row.onclick = () => {
+        const evI = Number(row.getAttribute('data-ev-i'));
+        if (window.Match3D && Number.isFinite(evI)) window.Match3D.jumpToEvent(evI);
+      };
+    });
   } else if (mtab === 'stats') {
     const s = M.stats;
     if (!s || !s.teams) { b.innerHTML = '<div class="empty panel">Статистика появится после начала матча.</div>'; return; }
@@ -3614,14 +3655,20 @@ function paintMatch() {
     const ratPitchBg = ratNum => ratNum === null ? '#64748b' : (ratNum >= 8.5 ? '#0284c7' : (ratNum >= 7.5 ? '#16a34a' : (ratNum >= 7.0 ? '#65a30d' : (ratNum >= 6.3 ? '#d97706' : '#dc2626'))));
     const fmtKm = v => v != null && Number.isFinite(Number(v)) ? (+v).toFixed(2) : '—';
     const fmtSpd = v => v != null && Number.isFinite(Number(v)) ? (+v).toFixed(1) + ' км/ч' : '—';
+    const fmtEn = v => v != null && Number.isFinite(Number(v)) ? `-${(+v).toFixed(0)}%` : '—';
+    const wlLabel = w => w === 'low' ? 'Низкая' : (w === 'moderate' ? 'Средняя' : (w === 'high' ? 'Высокая' : (w === 'very_high' ? 'Предельная' : '')));
+    const wlBadgeStyle = w => w === 'low' ? 'background:#e0f2fe;color:#0369a1' : (w === 'moderate' ? 'background:#f1f5f9;color:#334155' : (w === 'high' ? 'background:#fef3c7;color:#b45309' : (w === 'very_high' ? 'background:#fee2e2;color:#b91c1c' : '')));
 
     let playerSectionHtml = '';
     if (mStatsView === 'table') {
-      playerSectionHtml = `<div class="panel wrap"><table><thead><tr><th class="l">Игрок</th><th>Оценка</th><th>Мин</th><th>Г</th><th>П</th><th>Уд</th><th>xG</th><th>Отб</th><th>Сейвы</th><th>Фолы</th><th>ЖК</th><th>КК</th><th>Км</th><th>Макс. ск.</th></tr></thead><tbody>${pl.map(p => {
+      playerSectionHtml = `<div class="panel wrap"><table><thead><tr><th class="l">Игрок</th><th>Оценка</th><th>Мин</th><th>Г</th><th>П</th><th>Уд</th><th>xG</th><th>Отб</th><th>Сейвы</th><th>Фолы</th><th>ЖК</th><th>КК</th><th>Км</th><th>Макс. ск.</th><th>Энергия / Нагр.</th></tr></thead><tbody>${pl.map(p => {
         const ratNum = getRatNum(p.id, p);
         const rat = ratNum !== null ? ratNum.toFixed(1) : '—';
         const isMotm = isMotmPid(p.id, p.n);
-        return `<tr><td class="l">${isMotm ? '⭐ ' : ''}<b>${e(p.n)}</b> <span class="muted small">${p.side === 'home' ? e(M.fixture.homeName) : e(M.fixture.awayName)}</span></td><td><span class="tag" style="font-weight:700;${ratColorTag(ratNum)}">${rat}</span></td><td>${p.min}</td><td>${p.g}</td><td>${p.a}</td><td>${p.sh}</td><td>${p.xg}</td><td>${p.tk}</td><td>${p.sv}</td><td>${p.ff}/${p.fa}</td><td>${p.yc}</td><td>${p.rc}</td><td>${fmtKm(p.km)}</td><td>${fmtSpd(p.maxSpeed)}</td></tr>`;
+        const enCol = p.energyLoss != null ? (+p.energyLoss >= 35 ? '#b91c1c' : (+p.energyLoss >= 20 ? '#b45309' : '#15803d')) : 'var(--muted)';
+        const wlTxt = wlLabel(p.workload);
+        const enTitle = p.workloadNote ? e(p.workloadNote) : (wlTxt ? `Нагрузка: ${wlTxt}` : '');
+        return `<tr><td class="l">${isMotm ? '⭐ ' : ''}<b>${e(p.n)}</b> <span class="muted small">${p.side === 'home' ? e(M.fixture.homeName) : e(M.fixture.awayName)}</span></td><td><span class="tag" style="font-weight:700;${ratColorTag(ratNum)}">${rat}</span></td><td>${p.min}</td><td>${p.g}</td><td>${p.a}</td><td>${p.sh}</td><td>${p.xg}</td><td>${p.tk}</td><td>${p.sv}</td><td>${p.ff}/${p.fa}</td><td>${p.yc}</td><td>${p.rc}</td><td>${fmtKm(p.km)}</td><td>${fmtSpd(p.maxSpeed)}</td><td style="font-weight:700;color:${enCol}" title="${enTitle}">${fmtEn(p.energyLoss)}${wlTxt ? `<div class="small muted" style="font-weight:500">${wlTxt}</div>` : ''}</td></tr>`;
       }).join('')}</tbody></table></div>`;
     } else {
       const subOutMin = {};
@@ -3691,6 +3738,7 @@ function paintMatch() {
         const telBits = [];
         if (pStat.km != null) telBits.push(`${(+pStat.km).toFixed(1)}км`);
         if (pStat.maxSpeed != null) telBits.push(`${(+pStat.maxSpeed).toFixed(0)}км/ч`);
+        if (pStat.energyLoss != null) telBits.push(`-${(+pStat.energyLoss).toFixed(0)}%`);
         return `<div class="m-pitch-node ${mStatsSelPid === pid ? 'sel' : ''}" data-mstats-pid="${e(pid)}" title="${e(lp.name || pStat.n)} (${e(posLabel)})">
           <div class="m-pitch-avatar">
             <div class="m-pitch-circle ${side} ${isGk ? 'gk' : ''}">
@@ -3733,7 +3781,8 @@ function paintMatch() {
             if (pStat?.rc > 0) badges.push('🟥');
             if (pStat?.km != null) badges.push(`${(+pStat.km).toFixed(2)} км`);
             if (pStat?.maxSpeed != null) badges.push(`${(+pStat.maxSpeed).toFixed(1)} км/ч`);
-            return `<div class="m-pitch-bench-item ${mStatsSelPid === pid ? 'sel' : ''}" data-mstats-pid="${e(pid)}" style="${didPlay ? '' : 'opacity:0.65'}">
+            if (pStat?.energyLoss != null) badges.push(`🔋-${(+pStat.energyLoss).toFixed(0)}%${pStat.workload ? ` (${wlLabel(pStat.workload)})` : ''}`);
+            return `<div class="m-pitch-bench-item ${mStatsSelPid === pid ? 'sel' : ''}" data-mstats-pid="${e(pid)}" style="${didPlay ? '' : 'opacity:0.65'}" title="${pStat?.workloadNote ? e(pStat.workloadNote) : ''}">
               <div style="min-width:0">
                 <div><span class="tag" style="font-size:10.5px;margin-right:4px">${e(bp.pos || pStat?.pos || 'ИГР')}</span><b>${e(bp.name)}</b></div>
                 <div class="small muted">${didPlay ? `${pStat?.min || 0}'${badges.length ? ' · ' + badges.join(' · ') : ''}` : 'Не выходил на поле'}</div>
@@ -3771,6 +3820,9 @@ function paintMatch() {
             <span class="tag">🟨/🟥: <b>${sp.yc}/${sp.rc}</b></span>
             <span class="tag">🏃 Км: <b>${fmtKm(sp.km)}</b></span>
             <span class="tag">⚡ Макс. ск.: <b>${fmtSpd(sp.maxSpeed)}</b></span>
+            <span class="tag">🔋 Потеря энергии: <b>${fmtEn(sp.energyLoss)}</b></span>
+            ${sp.workload ? `<span class="tag" style="${wlBadgeStyle(sp.workload)}">📊 Нагрузка (ИИ): <b>${wlLabel(sp.workload)}</b></span>` : ''}
+            ${sp.workloadNote ? `<div class="small muted" style="width:100%;margin-top:2px">💬 ${e(sp.workloadNote)}</div>` : ''}
           </div>` : '<div class="muted small">Игрок не принимал участия в матче.</div>'}
         </div>`;
       }
@@ -7425,18 +7477,19 @@ function renderFatigueBadge(fat, available, unavailReason, opts = {}) {
   }
   const f = fat || { level: 'fresh', readiness: 100, shortText: 'Готов', label: 'свежий (начало игрового отрезка)' };
   const pct = Math.max(0, Math.min(100, Math.round(Number(f.readiness ?? (f.level === 'exhausted' ? 40 : f.level === 'tired' ? 65 : f.level === 'moderate' ? 84 : 100)))));
-  let ico = '🔋', statusTxt = f.shortText || 'Готов', bg = '#f0fdf4', fg = '#15803d', bd = '#86efac', bar = '#16a34a', hint = 'полностью готов к матчу';
+  const lastLossTxt = (f.lastMatchLoss != null && f.apps14d > 0) ? `-${Math.round(f.lastMatchLoss)}% в прошл. игре` : '';
+  let ico = '🔋', statusTxt = f.shortText || 'Готов', bg = '#f0fdf4', fg = '#15803d', bd = '#86efac', bar = '#16a34a', hint = lastLossTxt ? `${lastLossTxt} · готов играть` : 'полностью готов к матчу';
   if (f.level === 'exhausted') {
     ico = '🔥'; statusTxt = f.shortText || 'Истощён'; bg = '#fef2f2'; fg = '#b91c1c'; bd = '#fca5a5'; bar = '#dc2626';
-    hint = 'нужен отдых · риск просадки после 65\'';
+    hint = `${lastLossTxt ? lastLossTxt + ' · ' : ''}нужен отдых · риск просадки после 65'`;
   } else if (f.level === 'tired') {
     ico = '😓'; statusTxt = f.shortText || 'Устал'; bg = '#fffbeb'; fg = '#b45309'; bd = '#fcd34d'; bar = '#f59e0b';
-    hint = 'высокая нагрузка · спад во 2-м тайме';
+    hint = `${lastLossTxt ? lastLossTxt + ' · ' : ''}высокая нагрузка · спад во 2-м тайме`;
   } else if (f.level === 'moderate') {
     ico = '⚡'; statusTxt = f.shortText || 'В тонусе'; bg = '#f0fdfa'; fg = '#0f766e'; bd = '#99f6e4'; bar = '#14b8a6';
-    hint = `${f.min14d || 0} мин за 14 дн. · готов играть`;
+    hint = `${lastLossTxt || ((f.min14d || 0) + ' мин за 14 дн.')} · готов играть`;
   } else if (f.apps14d > 0 && f.starts14d === 0) {
-    hint = `свежий (${f.min14d} мин со скамейки)`;
+    hint = `свежий (${lastLossTxt || (f.min14d + ' мин со скамейки')})`;
   }
   const tip = f.label ? `${statusTxt} (${pct}%) — ${f.label}` : `${statusTxt} (${pct}%)`;
   if (compact) {
@@ -16171,5 +16224,6 @@ boot();
 })();
 </script>
 <datalist id="nat_list"><option value="Россия"><option value="Беларусь"><option value="Казахстан"><option value="Армения"><option value="Киргизия"><option value="Украина"><option value="Грузия"><option value="Азербайджан"><option value="Узбекистан"><option value="Таджикистан"><option value="Молдова"><option value="Сербия"><option value="Хорватия"><option value="Черногория"><option value="Босния и Герцеговина"><option value="Словения"><option value="Болгария"><option value="Румыния"><option value="Польша"><option value="Чехия"><option value="Словакия"><option value="Венгрия"><option value="Греция"><option value="Турция"><option value="Германия"><option value="Франция"><option value="Испания"><option value="Португалия"><option value="Италия"><option value="Англия"><option value="Нидерланды"><option value="Бельгия"><option value="Швейцария"><option value="Австрия"><option value="Дания"><option value="Швеция"><option value="Норвегия"><option value="Финляндия"><option value="Бразилия"><option value="Аргентина"><option value="Колумбия"><option value="Уругвай"><option value="Эквадор"><option value="Чили"><option value="Парагвай"><option value="Венесуэла"><option value="Мексика"><option value="США"><option value="Нигерия"><option value="Гана"><option value="Камерун"><option value="Сенегал"><option value="Кот-д’Ивуар"><option value="Мали"><option value="Марокко"><option value="Алжир"><option value="Египет"><option value="Япония"><option value="Южная Корея"><option value="Иран"><option value="Ирак"><option value="Австралия"></datalist>
+<script type="module" src="/src/match3d/index.ts"></script>
 </body>
 </html>
