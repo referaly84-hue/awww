@@ -53,14 +53,23 @@ export interface MatchPayload {
     pen?: { hg: number; ag: number } | null;
     stadium?: string;
     city?: string;
+    date?: string;
+    gameDate?: string;
     gameTime?: string;
     weather?: string;
     weatherShort?: string;
     weatherDetails?: {
       icon?: string;
       condition?: string;
+      weatherKind?: string;
+      season?: string;
+      temp?: number;
       tempC?: number;
+      wind?: number;
       windMs?: number;
+      humidity?: string | number;
+      humidityNum?: number;
+      pitch?: string;
       precipMm?: number;
     } | null;
   };
@@ -81,18 +90,29 @@ export interface MatchPayload {
 
 export type CameraMode = 'tv' | 'tactical' | 'goal' | 'free';
 
-export type WeatherKind = 'clear' | 'rain' | 'snow' | 'overcast';
+export type SeasonKind = 'winter' | 'spring' | 'summer' | 'autumn';
+
+export type WeatherKind = 'clear' | 'overcast' | 'fog' | 'rain' | 'storm' | 'snow' | 'blizzard';
 
 export interface ResolvedAtmosphere {
   isNight: boolean;
+  isSunset: boolean;
+  hour: number;
+  season: SeasonKind;
   weather: WeatherKind;
+  city: string;
+  conditionLabel: string;
   tempC: number;
   windMs: number;
-  skyColorHex: number;
+  skyTopHex: number;
+  skyHorizonHex: number;
   fogColorHex: number;
   fogDensity: number;
   sunIntensity: number;
+  sunColorHex: number;
   floodlightIntensity: number;
+  hasLightning: boolean;
+  useOrangeBall: boolean;
 }
 
 export interface PlaySegment {

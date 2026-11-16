@@ -2260,44 +2260,189 @@ function buildOfficialRplPots(rplTeams) {
   return { pot1, pot2, pot3, pot4 };
 }
 
-// src/squads_and_weather.ts
-var CLIMATE_DATA = {
-  "\u041C\u043E\u0441\u043A\u0432\u0430": { tempSummer: 23, tempWinter: -6, rainProb: 0.25 },
-  "\u0421\u0430\u043D\u043A\u0442-\u041F\u0435\u0442\u0435\u0440\u0431\u0443\u0440\u0433": { tempSummer: 21, tempWinter: -4, rainProb: 0.4 },
-  "\u041A\u0440\u0430\u0441\u043D\u043E\u0434\u0430\u0440": { tempSummer: 30, tempWinter: 3, rainProb: 0.15 },
-  "\u0420\u043E\u0441\u0442\u043E\u0432-\u043D\u0430-\u0414\u043E\u043D\u0443": { tempSummer: 29, tempWinter: 0, rainProb: 0.18 },
-  "\u041A\u0430\u0437\u0430\u043D\u044C": { tempSummer: 24, tempWinter: -10, rainProb: 0.22 },
-  "\u0421\u0430\u043C\u0430\u0440\u0430": { tempSummer: 25, tempWinter: -8, rainProb: 0.2 },
-  "\u0413\u0440\u043E\u0437\u043D\u044B\u0439": { tempSummer: 28, tempWinter: 2, rainProb: 0.16 },
-  "\u0421\u043E\u0447\u0438": { tempSummer: 28, tempWinter: 8, rainProb: 0.25 }
+var CITY_CLIMATE_SPECS: Record<string, { region: string; lat: number; lon: number; tempSummer: number; tempWinter: number; rainProb: number; avgWind: number; humidity: number }> = {
+  "Москва": { region: "Центральный ФО", lat: 55.755, lon: 37.617, tempSummer: 23, tempWinter: -6, rainProb: 0.28, avgWind: 3.8, humidity: 74 },
+  "Санкт-Петербург": { region: "Северо-Западный ФО", lat: 59.934, lon: 30.335, tempSummer: 21, tempWinter: -4, rainProb: 0.42, avgWind: 4.9, humidity: 82 },
+  "Краснодар": { region: "Южный ФО", lat: 45.035, lon: 38.975, tempSummer: 30, tempWinter: 3, rainProb: 0.18, avgWind: 3.5, humidity: 65 },
+  "Ростов-на-Дону": { region: "Южный ФО", lat: 47.235, lon: 39.701, tempSummer: 29, tempWinter: 0, rainProb: 0.2, avgWind: 4.3, humidity: 67 },
+  "Казань": { region: "Приволжский ФО", lat: 55.796, lon: 49.106, tempSummer: 24, tempWinter: -10, rainProb: 0.26, avgWind: 4.0, humidity: 75 },
+  "Самара": { region: "Приволжский ФО", lat: 53.195, lon: 50.101, tempSummer: 26, tempWinter: -9, rainProb: 0.22, avgWind: 4.1, humidity: 72 },
+  "Грозный": { region: "Северо-Кавказский ФО", lat: 43.318, lon: 45.698, tempSummer: 29, tempWinter: 2, rainProb: 0.19, avgWind: 3.2, humidity: 66 },
+  "Сочи": { region: "Южный ФО · Черноморское побережье", lat: 43.585, lon: 39.723, tempSummer: 27, tempWinter: 8, rainProb: 0.30, avgWind: 3.4, humidity: 76 },
+  "Калининград": { region: "Северо-Западный ФО", lat: 54.71, lon: 20.452, tempSummer: 22, tempWinter: 0, rainProb: 0.39, avgWind: 5.1, humidity: 81 },
+  "Нижний Новгород": { region: "Приволжский ФО", lat: 56.326, lon: 44.005, tempSummer: 23, tempWinter: -8, rainProb: 0.27, avgWind: 3.9, humidity: 75 },
+  "Оренбург": { region: "Приволжский ФО", lat: 51.768, lon: 55.097, tempSummer: 28, tempWinter: -12, rainProb: 0.16, avgWind: 4.6, humidity: 64 },
+  "Воронеж": { region: "Центральный ФО", lat: 51.66, lon: 39.2, tempSummer: 26, tempWinter: -5, rainProb: 0.23, avgWind: 3.7, humidity: 70 },
+  "Тольятти": { region: "Приволжский ФО", lat: 53.507, lon: 49.42, tempSummer: 25, tempWinter: -9, rainProb: 0.22, avgWind: 4.0, humidity: 72 },
+  "Екатеринбург": { region: "Уральский ФО", lat: 56.838, lon: 60.597, tempSummer: 22, tempWinter: -12, rainProb: 0.26, avgWind: 3.8, humidity: 73 },
+  "Махачкала": { region: "Северо-Кавказский ФО · Каспий", lat: 42.983, lon: 47.504, tempSummer: 29, tempWinter: 4, rainProb: 0.17, avgWind: 4.5, humidity: 72 },
+  "Хабаровск": { region: "Дальневосточный ФО", lat: 48.48, lon: 135.071, tempSummer: 25, tempWinter: -17, rainProb: 0.24, avgWind: 4.2, humidity: 71 },
+  "Волгоград": { region: "Южный ФО", lat: 48.708, lon: 44.513, tempSummer: 30, tempWinter: -5, rainProb: 0.16, avgWind: 4.2, humidity: 62 },
+  "Тула": { region: "Центральный ФО", lat: 54.193, lon: 37.617, tempSummer: 23, tempWinter: -6, rainProb: 0.26, avgWind: 3.6, humidity: 74 },
+  "Ярославль": { region: "Центральный ФО", lat: 57.626, lon: 39.884, tempSummer: 22, tempWinter: -8, rainProb: 0.29, avgWind: 3.7, humidity: 76 }
 };
-var ALL_TEAMS_GEO = {
-  "\u0417\u0435\u043D\u0438\u0442": { lat: 59.972, lon: 30.221, city: "\u0421\u0430\u043D\u043A\u0442-\u041F\u0435\u0442\u0435\u0440\u0431\u0443\u0440\u0433" },
-  "\u0421\u043F\u0430\u0440\u0442\u0430\u043A": { lat: 55.818, lon: 37.441, city: "\u041C\u043E\u0441\u043A\u0432\u0430" },
-  "\u0426\u0421\u041A\u0410": { lat: 55.791, lon: 37.516, city: "\u041C\u043E\u0441\u043A\u0432\u0430" },
-  "\u0414\u0438\u043D\u0430\u043C\u043E \u041C\u043E\u0441\u043A\u0432\u0430": { lat: 55.791, lon: 37.56, city: "\u041C\u043E\u0441\u043A\u0432\u0430" },
-  "\u041B\u043E\u043A\u043E\u043C\u043E\u0442\u0438\u0432": { lat: 55.803, lon: 37.742, city: "\u041C\u043E\u0441\u043A\u0432\u0430" },
-  "\u041A\u0440\u0430\u0441\u043D\u043E\u0434\u0430\u0440": { lat: 45.044, lon: 39.029, city: "\u041A\u0440\u0430\u0441\u043D\u043E\u0434\u0430\u0440" },
-  "\u0420\u043E\u0441\u0442\u043E\u0432": { lat: 47.209, lon: 39.738, city: "\u0420\u043E\u0441\u0442\u043E\u0432-\u043D\u0430-\u0414\u043E\u043D\u0443" },
-  "\u0420\u0443\u0431\u0438\u043D": { lat: 55.819, lon: 49.158, city: "\u041A\u0430\u0437\u0430\u043D\u044C" }
+function buildCityMonths(spec: { tempSummer: number; tempWinter: number; rainProb: number; avgWind: number; humidity: number }) {
+  // Seasonal factor per month (0=Jan -> coldest near 0, 6=Jul -> warmest near 1)
+  const factors = [0.0, 0.06, 0.24, 0.48, 0.72, 0.90, 1.0, 0.93, 0.70, 0.44, 0.20, 0.05];
+  const precipBias = [0.95, 0.85, 0.8, 0.85, 0.9, 1.0, 0.95, 0.95, 1.05, 1.15, 1.15, 1.05];
+  const windBias = [1.15, 1.15, 1.1, 1.0, 0.9, 0.85, 0.8, 0.85, 0.95, 1.05, 1.15, 1.15];
+  return factors.map((f, m) => {
+    const tDay = Math.round(spec.tempWinter + (spec.tempSummer - spec.tempWinter) * f);
+    const tNight = Math.round(tDay - (4 + f * 5));
+    const precipProb = Math.min(0.65, Math.max(0.08, +(spec.rainProb * precipBias[m]).toFixed(2)));
+    const avgWind = +(spec.avgWind * windBias[m]).toFixed(1);
+    const humidity = Math.min(92, Math.max(48, Math.round(spec.humidity + (1 - f) * 8 - (spec.tempSummer > 27 && f > 0.7 ? 10 : 0))));
+    return { tDay, tNight, precipProb, avgWind, humidity };
+  });
+}
+var CLIMATE_DATA: Record<string, any> = Object.fromEntries(
+  Object.entries(CITY_CLIMATE_SPECS).map(([city, spec]) => [
+    city,
+    { city, ...spec, months: buildCityMonths(spec) }
+  ])
+);
+var ALL_TEAMS_GEO: Record<string, { lat: number; lon: number; city: string; stadium?: string }> = {
+  "Зенит": { lat: 59.972, lon: 30.221, city: "Санкт-Петербург", stadium: "Газпром Арена" },
+  "Спартак": { lat: 55.818, lon: 37.441, city: "Москва", stadium: "Лукойл Арена" },
+  "ЦСКА": { lat: 55.791, lon: 37.516, city: "Москва", stadium: "ВЭБ Арена" },
+  "Динамо Москва": { lat: 55.791, lon: 37.56, city: "Москва", stadium: "ВТБ Арена" },
+  "Локомотив": { lat: 55.803, lon: 37.742, city: "Москва", stadium: "РЖД Арена" },
+  "Краснодар": { lat: 45.044, lon: 39.029, city: "Краснодар", stadium: "Ozon Арена" },
+  "Ростов": { lat: 47.209, lon: 39.738, city: "Ростов-на-Дону", stadium: "Ростов Арена" },
+  "Рубин": { lat: 55.819, lon: 49.158, city: "Казань", stadium: "Ак Барс Арена" },
+  "Крылья Советов": { lat: 53.277, lon: 50.237, city: "Самара", stadium: "Солидарность Самара Арена" },
+  "Ахмат": { lat: 43.323, lon: 45.745, city: "Грозный", stadium: "Ахмат Арена" },
+  "Сочи": { lat: 43.402, lon: 39.955, city: "Сочи", stadium: "Фишт" },
+  "Пари НН": { lat: 56.337, lon: 43.963, city: "Нижний Новгород", stadium: "Стадион Нижний Новгород" },
+  "Балтика": { lat: 54.698, lon: 20.533, city: "Калининград", stadium: "Ростех Арена" },
+  "Оренбург": { lat: 51.815, lon: 55.146, city: "Оренбург", stadium: "Газовик" },
+  "Акрон": { lat: 53.277, lon: 50.237, city: "Тольятти", stadium: "Солидарность Арена" },
+  "Факел": { lat: 51.668, lon: 39.183, city: "Воронеж", stadium: "Стадион Факел" }
 };
 function getOrCreateCityClimate(city) {
-  return CLIMATE_DATA[city] || { tempSummer: 22, tempWinter: -5, rainProb: 0.2 };
+  const key = String(city || "Москва").trim();
+  if (CLIMATE_DATA[key]) return CLIMATE_DATA[key];
+  const hit = Object.keys(CLIMATE_DATA).find(k => key.toLowerCase().includes(k.toLowerCase()) || k.toLowerCase().includes(key.toLowerCase()));
+  if (hit) return CLIMATE_DATA[hit];
+  const defSpec = { region: "Россия", lat: 55.75, lon: 37.62, tempSummer: 23, tempWinter: -6, rainProb: 0.24, avgWind: 3.8, humidity: 73 };
+  return { city: key, ...defSpec, months: buildCityMonths(defSpec) };
 }
 function calculateMatchWeather(cityName, dateStr, timeStr) {
-  const city = cityName || "\u041C\u043E\u0441\u043A\u0432\u0430";
+  const city = String(cityName || "Москва").trim();
   const climate = getOrCreateCityClimate(city);
-  const temp = Math.floor(climate.tempSummer + (Math.random() * 6 - 3));
-  const isRain = Math.random() < (climate.rainProb || 0.2);
-  const text = isRain ? `\u0414\u043E\u0436\u0434\u044C, +${temp}\xB0C, \u0432\u0435\u0442\u0435\u0440 4 \u043C/\u0441` : `\u042F\u0441\u043D\u043E, +${temp}\xB0C, \u0441\u043B\u0430\u0431\u044B\u0439 \u0432\u0435\u0442\u0435\u0440 2 \u043C/\u0441`;
-  const short = isRain ? `\u{1F327}\uFE0F +${temp}\xB0C` : `\u2600\uFE0F +${temp}\xB0C`;
+  const ds = String(dateStr || new Date().toISOString().slice(0, 10));
+  const mMatch = ds.match(/^\d{4}-(\d{2})-(\d{2})/);
+  const monthIdx = mMatch ? Math.max(0, Math.min(11, parseInt(mMatch[1], 10) - 1)) : new Date().getMonth();
+  const dayNum = mMatch ? parseInt(mMatch[2], 10) : new Date().getDate();
+  const hourMatch = String(timeStr || "17:00").match(/^(\d{1,2})/);
+  const hour = hourMatch ? parseInt(hourMatch[1], 10) : 17;
+
+  // Deterministic pseudo-random seed per city + date so repeated reads stay coherent
+  let seed = 0;
+  const seedStr = `${city}_${ds}`;
+  for (let i = 0; i < seedStr.length; i++) seed = (seed * 31 + seedStr.charCodeAt(i)) | 0;
+  const rand = (salt: number) => {
+    const x = Math.sin(seed + salt * 101.3) * 43758.5453;
+    return x - Math.floor(x);
+  };
+
+  const season = monthIdx === 11 || monthIdx <= 1 ? "winter" : monthIdx <= 4 ? "spring" : monthIdx <= 7 ? "summer" : "autumn";
+  const mNorm = (climate.months && climate.months[monthIdx]) || { tDay: 12, tNight: 5, precipProb: 0.25, avgWind: 3.8, humidity: 72 };
+  const isEveningOrNight = hour >= 19 || hour < 8;
+  const baseTemp = isEveningOrNight ? mNorm.tNight : mNorm.tDay;
+  const temp = Math.round(baseTemp + (rand(1) * 6 - 3));
+  const windMs = Math.max(1, Math.round(mNorm.avgWind * (0.65 + rand(2) * 0.95)));
+  const humidity = Math.min(96, Math.max(40, Math.round(mNorm.humidity + (rand(3) * 14 - 7))));
+  const feelsLike = Math.round(temp - (windMs >= 5 ? windMs * 0.6 : windMs * 0.25));
+  const dirs = ["С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ"];
+  const windDir = dirs[Math.floor(rand(4) * dirs.length)];
+  const pressure = Math.round(744 + rand(5) * 24);
+
+  const pRoll = rand(6);
+  const precipProb = mNorm.precipProb || 0.25;
+  let weatherKind = "clear";
+  let condition = "Ясно";
+  let icon = isEveningOrNight ? "🌙" : "☀️";
+  let precipitation = "Без осадков";
+  let pitch = "Ровный зелёный газон, отличное сцепление";
+
+  if (pRoll < precipProb) {
+    if (temp <= -2) {
+      if (windMs >= 6 || rand(7) < 0.32) {
+        weatherKind = "blizzard";
+        condition = "Метель, сильный снег";
+        icon = "❄️";
+        precipitation = "Снегопад, порывистый ветер";
+        pitch = "Снежная кромка, подогрев поля включён, оранжевый мяч";
+      } else {
+        weatherKind = "snow";
+        condition = "Снегопад";
+        icon = "🌨️";
+        precipitation = "Умеренный снег";
+        pitch = "Заснеженная бровка, подогрев поля, оранжевый мяч";
+      }
+    } else if (temp <= 2) {
+      weatherKind = "snow";
+      condition = "Мокрый снег";
+      icon = "🌨️";
+      precipitation = "Снег с дождём";
+      pitch = "Тяжёлый влажный газон с изморозью";
+    } else if (season === "summer" && temp >= 18 && rand(7) < 0.35) {
+      weatherKind = "storm";
+      condition = "Ливень, гроза";
+      icon = "⛈️";
+      precipitation = "Сильный ливень";
+      pitch = "Залитый водой быстрый газон";
+    } else {
+      weatherKind = "rain";
+      condition = windMs >= 6 ? "Сильный дождь" : "Дождь";
+      icon = "🌧️";
+      precipitation = windMs >= 6 ? "Интенсивный дождь" : "Мелкий дождь";
+      pitch = "Мокрый скользкий газон, мяч быстро катится";
+    }
+  } else if (pRoll < precipProb + (season === "autumn" || climate.humidity >= 78 ? 0.16 : 0.08)) {
+    weatherKind = "fog";
+    condition = "Туман, дымка";
+    icon = "🌫️";
+    precipitation = "Без осадков, высокая влажность";
+    pitch = "Сырой газон в утренней/вечерней дымке";
+  } else if (pRoll < precipProb + 0.42) {
+    weatherKind = "overcast";
+    condition = "Пасмурно";
+    icon = "☁️";
+    pitch = season === "winter" ? "Прохладный жёсткий газон с подогревом" : "Плотный ровный газон";
+  } else {
+    weatherKind = "clear";
+    condition = season === "winter" ? "Морозно и ясно" : isEveningOrNight ? "Ясный вечер" : "Солнечно";
+    icon = isEveningOrNight ? "🌙" : "☀️";
+    pitch = season === "winter" ? "Подогретый твёрдый газон" : "Идеальный зелёный газон";
+  }
+
+  const tempStr = temp > 0 ? `+${temp}°C` : `${temp}°C`;
+  const text = `${condition}, ${tempStr}, ветер ${windMs} м/с`;
+  const short = `${icon} ${tempStr}`;
+
   return {
     text,
     short,
+    city,
+    season,
+    monthIndex: monthIdx,
+    day: dayNum,
     temp,
-    condition: isRain ? "rain" : "clear",
-    wind: "3 \u043C/\u0441",
-    humidity: "65%"
+    tempC: temp,
+    feelsLike,
+    condition,
+    weatherKind,
+    icon,
+    wind: windMs,
+    windMs,
+    windDir,
+    humidity: `${humidity}%`,
+    humidityNum: humidity,
+    pressure,
+    precipitation,
+    pitch
   };
 }
 var RUSSIAN_FIRST_NAMES = ["\u0418\u0432\u0430\u043D", "\u0410\u043B\u0435\u043A\u0441\u0435\u0439", "\u0414\u043C\u0438\u0442\u0440\u0438\u0439", "\u041C\u0430\u043A\u0441\u0438\u043C", "\u0421\u0435\u0440\u0433\u0435\u0439", "\u0410\u0440\u0442\u0435\u043C", "\u041C\u0438\u0445\u0430\u0438\u043B", "\u0414\u0430\u043D\u0438\u0438\u043B", "\u041A\u0438\u0440\u0438\u043B\u043B", "\u041D\u0438\u043A\u0438\u0442\u0430", "\u0410\u043D\u0434\u0440\u0435\u0439", "\u0418\u043B\u044C\u044F"];
@@ -3925,6 +4070,8 @@ function load() {
   }
   if (!db.cityClimates || !Object.keys(db.cityClimates).length) {
     db.cityClimates = CLIMATE_DATA;
+  } else {
+    db.cityClimates = { ...db.cityClimates, ...CLIMATE_DATA };
   }
   if (!db.dailyWeather) db.dailyWeather = {};
   for (const t of db.teams || []) {
@@ -10446,13 +10593,16 @@ app.get("/api/admin/internal-tournament", admin, (req, res) => {
   res.json({ season: String(req.query.season || S()), groups: internalTournament(req.query.season ? String(req.query.season) : void 0) });
 });
 app.get("/api/weather/cities", (req, res) => {
-  const cities = Object.values(db.cityClimates || CLIMATE_DATA).map((c) => ({
-    city: c.city,
-    region: c.region,
-    lat: c.lat,
-    lon: c.lon,
-    months: c.months
-  }));
+  const merged = { ...CLIMATE_DATA, ...(db.cityClimates || {}) };
+  const cities = Object.values(merged)
+    .filter((c: any) => c && c.city && Array.isArray(c.months))
+    .map((c: any) => ({
+      city: c.city,
+      region: c.region,
+      lat: c.lat,
+      lon: c.lon,
+      months: c.months
+    }));
   res.json(cities);
 });
 app.get("/api/weather/city/:cityName", (req, res) => {

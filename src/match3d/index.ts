@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { MatchAudioEngine } from './audio';
 import { buildMatchTimeline, buildPlayerSlots, type TimelineBuild } from './choreography';
+import { buildDemoMatch, type DemoPresetId } from './demo';
 import { buildPlayersManager, resolveMatchKits, setRefereeCardColor, type PlayersManager } from './players';
 import { buildStadiumAndAtmosphere, resolveAtmosphere, type StadiumRig } from './stadium';
 import type { CameraMode, MatchEvent, MatchPayload, PlayerSlot, PlaySegment } from './types';
@@ -212,7 +213,12 @@ class Match3DEngine {
               </div>
 
               <div style="pointer-events:auto;display:flex;align-items:center;gap:6px">
-                ${weatherStr ? `<span style="padding:5px 9px;background:rgba(9,18,14,0.82);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#cde0d5;font-size:11.5px;white-space:nowrap">${escapeHtml(weatherStr.split(',')[0])}</span>` : ''}
+                ${(() => {
+                  const at = resolveAtmosphere(m);
+                  const tStr = `${at.tempC > 0 ? '+' : ''}${at.tempC}°C`;
+                  const sMap = { winter: 'Зима', spring: 'Весна', summer: 'Лето', autumn: 'Осень' };
+                  return `<span style="padding:5px 9px;background:rgba(9,18,14,0.82);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#cde0d5;font-size:11.5px;white-space:nowrap">${escapeHtml(at.city)} · ${sMap[at.season]} · ${tStr} · ${escapeHtml(at.conditionLabel || weatherStr.split(',')[0])}</span>`;
+                })()}
                 <button type="button" data-act="toggle-hud" title="Скрыть/показать интерфейс [H]" style="cursor:pointer;padding:6px 10px;background:rgba(9,18,14,0.84);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">HUD</button>
                 <button type="button" data-act="fullscreen" title="Во весь экран" style="cursor:pointer;padding:6px 10px;background:rgba(9,18,14,0.84);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">⛶</button>
               </div>
@@ -520,7 +526,7 @@ class Match3DEngine {
     const kits = resolveMatchKits(m.fixture.homeColors, m.fixture.awayColors);
 
     this.stadium = buildStadiumAndAtmosphere(scene, m, atmo, maxAniso, this.isSoftwareGl, kits.homeJersey, kits.awayJersey);
-    this.players = buildPlayersManager(scene, this.slots, kits, this.isSoftwareGl);
+    this.players = buildPlayersManager(scene, this.slots, kits, this.isSoftwareGl, atmo.tempC <= 4 || atmo.season === 'winter');
     this.players.setLabelsVisible(this.showNames);
 
     this.resizeObs = new ResizeObserver(() => {
@@ -901,6 +907,13 @@ class Match3DEngine {
       this.host = null;
     }
     this.matchId = null;
+  }
+
+  public buildDemo(
+    preset: DemoPresetId = 'night_rain',
+    customClubs?: Parameters<typeof buildDemoMatch>[1]
+  ) {
+    return buildDemoMatch(preset, customClubs);
   }
 }
 

@@ -81,7 +81,8 @@ export function buildPlayersManager(
   scene: THREE.Scene,
   slots: PlayerSlot[],
   kits: KitSet,
-  isSoftwareGl: boolean
+  isSoftwareGl: boolean,
+  longSleeves = false
 ): PlayersManager {
   const group = new THREE.Group();
   const rigs = new Map<string, PlayerRig>();
@@ -174,7 +175,7 @@ export function buildPlayersManager(
       const sleeve = new THREE.Mesh(sleeveGeo, jerseyMat);
       sleeve.position.y = -0.09;
       p.add(sleeve);
-      const limb = new THREE.Mesh(armGeo, isRef ? jerseyMat : skinMat);
+      const limb = new THREE.Mesh(armGeo, isRef || longSleeves ? jerseyMat : skinMat);
       limb.position.y = -0.26;
       p.add(limb);
       if (gloveMat) {

@@ -2017,7 +2017,8 @@ function drawChrome() {
   }
   links.push(
     ['#/leaders', 'Статистика'],
-    ['#/national', 'Сборная']
+    ['#/national', 'Сборная'],
+    ['#/demo3d', '🎬 3D Демо']
   );
   if (S.me?.role === 'admin') links.push(['#/weather', '🌤️ Погода']);
   if (S.me?.role === 'club') links.push(['#/club', 'Мой клуб']);
@@ -2092,12 +2093,12 @@ window.addEventListener('hashchange', (ev) => {
 function route() {
   if (S.es) { S.es.close(); S.es = null; }
   const [, page, a, b] = (location.hash || '#/').split('/');
-  if (page !== 'match' && window.Match3D) {
+  if (page !== 'match' && page !== 'demo3d' && page !== 'weather' && window.Match3D) {
     try { window.Match3D.destroy(); } catch {}
   }
   const app = $('#app');
   scrollTo(0, 0);
-  const R = { '': pgHome, undefined: pgHome, table: pgTable, fixtures: pgFixtures, match: pgMatch, draw: pgDraw, leaders: pgLeaders, national: pgNational, insider: (app) => { location.hash = '#/'; return pgHome(app); }, esk: (app) => { location.hash = '#/'; return pgHome(app); }, weather: (app, a, b) => { if (S.me?.role !== 'admin') { location.hash = '#/'; return pgHome(app); } return pgWeather(app, a, b); }, regulations: pgHome, club: pgClub, admin: pgAdmin, login: pgLogin, team: pgTeamStats };
+  const R = { '': pgHome, undefined: pgHome, table: pgTable, fixtures: pgFixtures, match: pgMatch, demo3d: pgDemo3D, draw: pgDraw, leaders: pgLeaders, national: pgNational, insider: (app) => { location.hash = '#/'; return pgHome(app); }, esk: (app) => { location.hash = '#/'; return pgHome(app); }, weather: (app, a, b) => { if (S.me?.role !== 'admin') { location.hash = '#/'; return pgHome(app); } return pgWeather(app, a, b); }, regulations: pgHome, club: pgClub, admin: pgAdmin, login: pgLogin, team: pgTeamStats };
   (R[page] || pgHome)(app, a, b).catch(x => {
     app.innerHTML = `<div class="panel warn">${e(x.message)}</div>`;
   });
@@ -2582,7 +2583,10 @@ async function pgHome(app) {
 
   const hasAnyTransfers = (topTr?.expensive?.length || 0) > 0 || (topTr?.valuable?.length || 0) > 0 || (topTr?.flops?.length || 0) > 0;
 
-  app.innerHTML = `<h1>Сезон ${e(S.st?.season || '2026/27')}</h1>
+  app.innerHTML = `<div class="row sp" style="flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <h1 style="margin:0">Сезон ${e(S.st?.season || '2026/27')}</h1>
+    <a href="#/demo3d" class="btn sm" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-weight:700">🎬 Запустить 3D-демо матча</a>
+  </div>
 
   ${live.length ? `<div class="panel"><h3><span class="live-dot"></span>Сейчас идут</h3>${live.map(f => fxRow(f, true)).join('')}</div>` : ''}
   <div class="grid g2">
@@ -3431,6 +3435,237 @@ const EVI = { goal: '⚽', own_goal: '⚽', yellow: '🟨', red: '🟥', injury:
 const fmtEvT = x => { const t = x.min * 60 + (x.sec || 0), a = Math.abs(t); return (t < 0 ? '−' : '') + Math.floor(a / 60) + ':' + String(a % 60).padStart(2, '0'); };
 let M = null, evs = [], mtab = 'live', mStatsView = 'table', mStatsSelPid = null;
 
+async function ensureMatch3DLoaded() {
+  if (window.Match3D) return window.Match3D;
+  await import('/src/match3d/index.ts');
+  return window.Match3D;
+}
+
+async function pgDemo3D(app, presetArg) {
+  let preset = ['night_rain', 'day_clear', 'snow_derby'].includes(presetArg) ? presetArg : 'night_rain';
+  app.innerHTML = `<div class="panel" style="padding:22px;text-align:center">Загрузка 3D-стадиона и климата…</div>`;
+  const [m3d, citiesRaw] = await Promise.all([
+    ensureMatch3DLoaded(),
+    api('/weather/cities').catch(() => [])
+  ]);
+  if (!m3d) {
+    app.innerHTML = `<div class="panel warn">Не удалось загрузить 3D-модуль.</div>`;
+    return;
+  }
+
+  const cities = Array.isArray(citiesRaw) && citiesRaw.length
+    ? citiesRaw
+    : ['Москва', 'Санкт-Петербург', 'Краснодар', 'Сочи', 'Казань', 'Екатеринбург', 'Калининград', 'Ростов-на-Дону', 'Оренбург', 'Хабаровск'].map(c => ({ city: c, region: 'Россия' }));
+
+  let selCity = cities[0]?.city || 'Москва';
+  let selDate = new Date().toISOString().slice(0, 10);
+  let selTime = '18:30';
+  let selWeatherMode = 'auto'; // 'auto' | 'clear' | 'overcast' | 'fog' | 'rain' | 'storm' | 'snow' | 'blizzard'
+
+  const presetsMeta = [
+    ['night_rain', 'Зенит — Спартак'],
+    ['day_clear', 'ЦСКА — Динамо'],
+    ['snow_derby', 'Краснодар — Локомотив'],
+  ];
+
+  const weatherOverrideMeta = {
+    clear: { label: 'Ясно / Солнце', icon: '☀️', tempOffset: 0 },
+    overcast: { label: 'Пасмурно', icon: '☁️', tempOffset: -1 },
+    fog: { label: 'Туман / Дымка', icon: '🌫️', tempOffset: -2 },
+    rain: { label: 'Дождь', icon: '🌧️', tempOffset: -2 },
+    storm: { label: 'Ливень и гроза', icon: '⛈️', tempOffset: -1 },
+    snow: { label: 'Снегопад', icon: '🌨️', tempOffset: -8 },
+    blizzard: { label: 'Метель', icon: '❄️', tempOffset: -12 },
+  };
+
+  const renderScenario = async () => {
+    let wData = null;
+    try {
+      wData = await api(`/weather/city/${encodeURIComponent(selCity)}?date=${encodeURIComponent(selDate)}&time=${encodeURIComponent(selTime)}`);
+    } catch {
+      wData = null;
+    }
+
+    const monthNum = parseInt(selDate.slice(5, 7) || '10', 10);
+    const derivedSeason = (monthNum === 12 || monthNum <= 2) ? 'winter' : (monthNum <= 5 ? 'spring' : (monthNum <= 8 ? 'summer' : 'autumn'));
+    const seasonLabel = { winter: 'Зима', spring: 'Весна', summer: 'Лето', autumn: 'Осень' }[wData?.season || derivedSeason] || 'Сезон';
+
+    let finalTemp = Number.isFinite(Number(wData?.temp)) ? Number(wData.temp) : 14;
+    let finalKind = wData?.weatherKind || 'clear';
+    let finalCondition = wData?.condition || 'Ясно';
+    let finalIcon = wData?.icon || '🌤️';
+    let finalWind = Number.isFinite(Number(wData?.windMs ?? wData?.wind)) ? Number(wData.windMs ?? wData.wind) : 3;
+    let finalPitch = wData?.pitch || 'Зелёный газон';
+
+    if (selWeatherMode !== 'auto' && weatherOverrideMeta[selWeatherMode]) {
+      const ov = weatherOverrideMeta[selWeatherMode];
+      finalKind = selWeatherMode;
+      finalCondition = ov.label;
+      finalIcon = ov.icon;
+      if ((selWeatherMode === 'snow' || selWeatherMode === 'blizzard') && finalTemp > 0) {
+        finalTemp = selWeatherMode === 'blizzard' ? -7 : -2;
+      } else if ((selWeatherMode === 'rain' || selWeatherMode === 'storm') && finalTemp < 2) {
+        finalTemp = 6;
+      }
+      if (selWeatherMode === 'blizzard' || selWeatherMode === 'storm') finalWind = Math.max(finalWind, 8);
+      finalPitch = selWeatherMode === 'snow' || selWeatherMode === 'blizzard'
+        ? 'Снежная кромка, подогрев поля, оранжевый мяч'
+        : selWeatherMode === 'rain' || selWeatherMode === 'storm'
+          ? 'Мокрый быстрый газон'
+          : selWeatherMode === 'fog'
+            ? 'Плотная дымка над стадионом'
+            : 'Ровный газон';
+    }
+
+    const tempBadge = `${finalTemp > 0 ? '+' : ''}${finalTemp}°C`;
+    const weatherText = `${finalCondition}, ${tempBadge}, ветер ${finalWind} м/с`;
+
+    const bundle = m3d.buildDemo(preset, {
+      city: selCity,
+      gameDate: selDate,
+      gameTime: selTime,
+      weather: weatherText,
+      weatherDetails: {
+        ...(wData || {}),
+        temp: finalTemp,
+        tempC: finalTemp,
+        wind: finalWind,
+        windMs: finalWind,
+        condition: finalCondition,
+        weatherKind: finalKind,
+        season: wData?.season || derivedSeason,
+        icon: finalIcon,
+        pitch: finalPitch,
+      }
+    });
+    const evList = bundle.events;
+
+    app.innerHTML = `
+      <div style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <button id="demo-back" class="btn alt sm" type="button" style="cursor:pointer">← На главную</button>
+          <b style="font:700 17px Unbounded,sans-serif">3D-Арена и Погода</b>
+          <span class="tag" style="background:#e0f2fe;color:#0369a1;border-color:#bae6fd;font-weight:700">${e(selCity)} · ${seasonLabel}</span>
+        </div>
+        <div class="tabs" id="demo-presets" style="margin:0">
+          ${presetsMeta.map(([k, label]) => `<button type="button" data-dp="${k}" class="${k === preset ? 'on' : ''}">${label}</button>`).join('')}
+        </div>
+      </div>
+
+      <div class="panel" style="margin-bottom:14px;padding:14px">
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:10px;align-items:end">
+          <div>
+            <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">ГОРОД АРЕНЫ</label>
+            <select id="d3d_city" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">
+              ${cities.map(c => `<option value="${e(c.city)}" ${c.city === selCity ? 'selected' : ''}>${e(c.city)}</option>`).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">ДАТА И ВРЕМЯ ГОДА</label>
+            <input type="date" id="d3d_date" value="${e(selDate)}" style="width:100%;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)"/>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">ВРЕМЯ СУТОК</label>
+            <select id="d3d_time" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">
+              <option value="14:00" ${selTime === '14:00' ? 'selected' : ''}>☀️ День (14:00)</option>
+              <option value="18:30" ${selTime === '18:30' ? 'selected' : ''}>🌅 Закат (18:30)</option>
+              <option value="21:00" ${selTime === '21:00' ? 'selected' : ''}>🌙 Вечер / Прожекторы (21:00)</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;font-weight:700;color:var(--muted);display:block;margin-bottom:4px">ПОГОДА</label>
+            <select id="d3d_weather" style="width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--panel)">
+              <option value="auto" ${selWeatherMode === 'auto' ? 'selected' : ''}>🌍 Авто по климату города</option>
+              ${Object.entries(weatherOverrideMeta).map(([k, v]) => `<option value="${k}" ${selWeatherMode === k ? 'selected' : ''}>${v.icon} ${v.label}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)">
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <button type="button" class="btn alt sm" data-season-date="2026-01-18">❄️ Зима</button>
+            <button type="button" class="btn alt sm" data-season-date="2026-04-18">🌱 Весна</button>
+            <button type="button" class="btn alt sm" data-season-date="2026-07-18">☀️ Лето</button>
+            <button type="button" class="btn alt sm" data-season-date="2026-10-25">🍂 Осень</button>
+          </div>
+          <div style="font-size:12.5px;color:var(--ink);display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span><b>${finalIcon} ${e(finalCondition)}</b> (${tempBadge})</span>
+            <span class="muted">Ветер: <b>${finalWind} м/с</b>${wData?.humidity ? ` · Влажность: <b>${e(wData.humidity)}</b>` : ''}</span>
+            <span class="muted">Газон: <b>${e(finalPitch)}</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div id="demo3d-host"></div>
+
+      <div class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:13.5px;color:var(--deep)">Ключевые моменты демо-матча (${e(bundle.title)})</span>
+          <span class="muted small">Нажмите на любой эпизод, чтобы сразу увидеть его в 3D</span>
+        </div>
+        <div id="demo3d-feed">
+          ${evList.map(x => {
+            const cls = x.type === 'goal' ? 'goal' : x.type === 'red' ? 'red' : ['yellow', 'penalty', 'post', 'save', 'halftime', 'fulltime'].includes(x.type) ? 'key' : '';
+            return `<div class="ev ${cls}" data-ev-i="${x.i}" style="cursor:pointer" title="Перейти к этому моменту в 3D">
+              <div class="m">${fmtEvT(x)}</div>
+              <div>${EVI[x.type] || '·'}</div>
+              <div>${e(x.text)}${x.type === 'goal' ? `<div class="pl"><b>${x.score[0]}:${x.score[1]}</b></div>` : ''}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
+    `;
+
+    app.querySelector('#demo-back')?.addEventListener('click', () => { location.hash = '#/'; });
+    app.querySelectorAll('#demo-presets button').forEach(b => {
+      b.onclick = () => {
+        preset = b.dataset.dp;
+        renderScenario();
+      };
+    });
+    app.querySelector('#d3d_city')?.addEventListener('change', ev => {
+      selCity = ev.target.value;
+      renderScenario();
+    });
+    app.querySelector('#d3d_date')?.addEventListener('change', ev => {
+      if (ev.target.value) selDate = ev.target.value;
+      renderScenario();
+    });
+    app.querySelector('#d3d_time')?.addEventListener('change', ev => {
+      selTime = ev.target.value;
+      renderScenario();
+    });
+    app.querySelector('#d3d_weather')?.addEventListener('change', ev => {
+      selWeatherMode = ev.target.value;
+      renderScenario();
+    });
+    app.querySelectorAll('[data-season-date]').forEach(btn => {
+      btn.onclick = () => {
+        selDate = btn.getAttribute('data-season-date');
+        renderScenario();
+      };
+    });
+
+    const host = app.querySelector('#demo3d-host');
+    m3d.mount(host, bundle.payload, evList, {
+      onActiveEvent: (evIdx) => {
+        app.querySelectorAll('#demo3d-feed .ev.active-3d').forEach(el => el.classList.remove('active-3d'));
+        const hit = app.querySelector(`#demo3d-feed .ev[data-ev-i="${evIdx}"]`);
+        if (hit) hit.classList.add('active-3d');
+      }
+    });
+
+    app.querySelectorAll('#demo3d-feed .ev[data-ev-i]').forEach(row => {
+      row.onclick = () => {
+        const idx = Number(row.getAttribute('data-ev-i'));
+        if (Number.isFinite(idx)) m3d.jumpToEvent(idx);
+      };
+    });
+  };
+
+  await renderScenario();
+}
+
 async function pgMatch(app, id) {
   M = await api('/match/' + id);
   evs = (M.events || []).slice();
@@ -3609,7 +3844,29 @@ function paintMatch() {
 
   if (mtab === 'live') {
     if (!evs.length) {
-      b.innerHTML = `<div class="empty panel">${f.status === 'scheduled' ? 'Трансляция начнётся, когда матч будет запущен.' : 'Ждём первые события…'}</div>`;
+      b.innerHTML = `<div class="empty panel">
+        <div>${f.status === 'scheduled' ? 'Трансляция начнётся, когда матч будет запущен.' : 'Ждём первые события…'}</div>
+        ${f.status === 'scheduled' ? `<div style="margin-top:12px"><button type="button" id="btn_match_demo3d" class="btn sm" style="cursor:pointer;font-weight:700">🎬 Запустить 3D-демо этого матча</button></div>` : ''}
+      </div>`;
+      const bDemo = b.querySelector('#btn_match_demo3d');
+      if (bDemo && m3dHost) {
+        bDemo.onclick = async () => {
+          bDemo.disabled = true;
+          bDemo.textContent = 'Загрузка 3D…';
+          const m3d = await ensureMatch3DLoaded();
+          if (m3d) {
+            const bundle = m3d.buildDemo('night_rain', {
+              home: { id: f.home, name: f.homeName, logo: f.homeLogo || teamLogo(f.home), colors: f.homeColors, stadium: f.stadium },
+              away: { id: f.away, name: f.awayName, logo: f.awayLogo || teamLogo(f.away), colors: f.awayColors },
+              weather: M.ctx?.weather || f.weather || undefined,
+              gameTime: f.gameTime || undefined,
+            });
+            m3dHost.style.display = '';
+            m3d.mount(m3dHost, bundle.payload, bundle.events);
+            bDemo.textContent = '🎬 3D-демо запущено выше';
+          }
+        };
+      }
       return;
     }
     b.innerHTML = '<div class="panel"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;flex-wrap:wrap"><span style="font-weight:700;font-size:13.5px;color:var(--deep)">Хроника матча</span><span class="muted small">Нажмите на любое событие, чтобы перейти к моменту в 3D</span></div>' + [...evs].reverse().map(x => {
@@ -12214,7 +12471,7 @@ async function pgWeather(app) {
       <div style="display:flex;gap:20px;flex-wrap:wrap;font-size:13.5px;color:#0c4a6e">
         <div>
           <div>💨 <b>Ветер:</b> ${w.wind} м/с (${e(w.windDir)})</div>
-          <div style="margin-top:4px">💧 <b>Влажность:</b> ${w.humidity}%</div>
+          <div style="margin-top:4px">💧 <b>Влажность:</b> ${e(String(w.humidity || (w.humidityNum != null ? w.humidityNum + '%' : '—')))}</div>
         </div>
         <div>
           <div>🌡 <b>Давление:</b> ${w.pressure} мм рт. ст.</div>
@@ -12227,6 +12484,8 @@ async function pgWeather(app) {
     </div>
   </div>` : ''}
 
+  <div id="weather_arena_3d" style="margin-top:16px"></div>
+
   ${monthRows}
 
   ${cityFixtures.length ? `
@@ -12235,6 +12494,23 @@ async function pgWeather(app) {
     <div style="margin-top:10px">${cityFixtures.map(fxRow).join('')}</div>
   </div>` : ''}
   `;
+
+  if (w) {
+    ensureMatch3DLoaded().then(m3d => {
+      const wHost = $('#weather_arena_3d');
+      if (!m3d || !wHost) return;
+      const homeClub = cityTeams[0];
+      const bundle = m3d.buildDemo('night_rain', {
+        city: WEATHER_CITY,
+        gameDate: WEATHER_DATE,
+        gameTime: '17:00',
+        weather: w.text,
+        weatherDetails: w,
+        home: homeClub ? { id: homeClub.id, name: homeClub.name, stadium: homeClub.stadium, city: WEATHER_CITY } : { name: WEATHER_CITY, city: WEATHER_CITY },
+      });
+      m3d.mount(wHost, bundle.payload, bundle.events);
+    }).catch(() => {});
+  }
 
   $('#weather_city_sel') && ($('#weather_city_sel').onchange = (ev) => {
     WEATHER_CITY = ev.target.value;
