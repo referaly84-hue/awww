@@ -4,6 +4,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { MatchAudioEngine } from './audio';
 import { buildMatchTimeline, buildPlayerSlots, type TimelineBuild } from './choreography';
 import { buildDemoMatch, type DemoPresetId } from './demo';
+import { MatchPhysicsWorld, stepPlayersSteering } from './physics';
 import { buildPlayersManager, resolveMatchKits, setRefereeCardColor, type PlayersManager } from './players';
 import { buildStadiumAndAtmosphere, resolveAtmosphere, type StadiumRig } from './stadium';
 import type { CameraMode, MatchEvent, MatchPayload, PlayerSlot, PlaySegment } from './types';
@@ -36,7 +37,7 @@ class Match3DEngine {
   private payload: MatchPayload | null = null;
   private events: MatchEvent[] = [];
   private slots: PlayerSlot[] = [];
-  private timeline: TimelineBuild = { segments: [], startTimeSec: 0, endTimeSec: 5400, keyEventSecs: [] };
+  private timeline: TimelineBuild = { segments: [], startTimeSec: 0, endTimeSec: 5400, totalPlaySec: 10, keyEventSecs: [] };
 
   private renderer: THREE.WebGLRenderer | null = null;
   private scene: THREE.Scene | null = null;
@@ -45,6 +46,7 @@ class Match3DEngine {
   private pmremEnv: THREE.WebGLRenderTarget | null = null;
   private stadium: StadiumRig | null = null;
   private players: PlayersManager | null = null;
+  private physics: MatchPhysicsWorld | null = null;
   private audio = new MatchAudioEngine();
 
   private isSoftwareGl = false;
@@ -55,8 +57,9 @@ class Match3DEngine {
   private hiddenPaused = false;
   private contextLost = false;
 
-  // Simulation state
-  private simSec = 0;
+  // Continuous real-time simulation state
+  private playSec = 0;
+  private simMatchSec = 0;
   private playing = true;
   private speed = 1;
   private cameraMode: CameraMode = 'tv';
@@ -70,22 +73,21 @@ class Match3DEngine {
   private goalBannerTimer = 0;
   private goalBannerTeam = '';
   private goalMood = 0;
+  private camShake = 0;
   private onActiveEventChange?: (evIndex: number) => void;
 
-  // Pre-allocated math objects (zero allocations in tick loop)
-  private readonly ballPos = new THREE.Vector3(0, 0.24, 0);
-  private readonly prevBallPos = new THREE.Vector3(0, 0.24, 0);
-  private readonly ballVel = new THREE.Vector3(0, 0, 0);
-  private readonly camTarget = new THREE.Vector3(0, 0, 0);
+  // Pre-allocated math objects (zero GC in tick loop)
+  private readonly camTarget = new THREE.Vector3(0, 0.8, 0);
   private readonly camDesiredPos = new THREE.Vector3(0, 32, 48);
-  private readonly camDesiredTarget = new THREE.Vector3(0, 0, 0);
+  private readonly camDesiredTarget = new THREE.Vector3(0, 0.8, 0);
+  private readonly camFocus = new THREE.Vector3(0, 0.22, 0);
   private readonly activeActorIds = new Set<string>();
   private readonly slotTargetMap = new Map<string, [number, number]>();
+  private readonly refTarget: [number, number] = [-4, -6];
 
   // UI elements
   private stageEl: HTMLElement | null = null;
   private canvasEl: HTMLCanvasElement | null = null;
-  private hudRootEl: HTMLElement | null = null;
   private dockEl: HTMLElement | null = null;
   private scoreEl: HTMLElement | null = null;
   private clockEl: HTMLElement | null = null;
@@ -121,14 +123,14 @@ class Match3DEngine {
     this.slots = buildPlayerSlots(payload);
     this.timeline = buildMatchTimeline(this.events, this.slots);
 
-    // For completed matches, start right at kickoff or first event; for live matches start near latest event
     if (payload.fixture.status === 'live' && this.timeline.segments.length) {
       const lastSeg = this.timeline.segments[this.timeline.segments.length - 1];
-      this.simSec = Math.max(0, lastSeg.startSec);
+      this.playSec = Math.max(0, lastSeg.playStartSec);
     } else {
       const kickoffSeg = this.timeline.segments.find(s => s.startSec >= 0) || this.timeline.segments[0];
-      this.simSec = kickoffSeg ? kickoffSeg.startSec : 0;
+      this.playSec = kickoffSeg ? kickoffSeg.playStartSec : 0;
     }
+    this.simMatchSec = this.computeMatchSecAt(this.playSec);
 
     this.playing = true;
     this.hiddenPaused = false;
@@ -136,9 +138,17 @@ class Match3DEngine {
     this.lastTriggeredSegId = '';
     this.goalBannerTimer = 0;
     this.goalMood = 0;
+    this.camShake = 0;
 
     this.buildDom(container, payload);
     this.initThree(payload);
+
+    const firstSeg = this.getSegmentAtPlay(this.playSec);
+    if (firstSeg && this.physics) {
+      this.physics.resetForSegment(firstSeg, false);
+      this.camFocus.copy(this.physics.ballPos);
+    }
+
     this.renderScrubberMarkers();
     this.syncHudImmediate();
     this.startLoop();
@@ -152,11 +162,10 @@ class Match3DEngine {
     this.timeline = buildMatchTimeline(this.events, this.slots);
     this.renderScrubberMarkers();
 
-    // If a brand-new live SSE event just arrived and user is near the live edge, smoothly animate it!
     if (this.events.length > prevLen && payload.fixture.status === 'live') {
       const newestSeg = this.timeline.segments[this.timeline.segments.length - 1];
-      if (newestSeg && newestSeg.startSec - this.simSec < 95) {
-        this.simSec = newestSeg.startSec;
+      if (newestSeg && newestSeg.playStartSec - this.playSec < 18) {
+        this.playSec = newestSeg.playStartSec;
         this.playing = true;
       }
     }
@@ -164,14 +173,12 @@ class Match3DEngine {
   }
 
   public jumpToEvent(evIndex: number): void {
-    const seg = this.timeline.segments.find(s => s.evIndex === evIndex && !s.isSynthesized)
+    const seg = this.timeline.segments.find(s => s.evIndex === evIndex && !s.isSynthesized && !s.isBuildup)
       || this.timeline.segments.find(s => s.evIndex === evIndex);
     if (!seg) return;
-    this.simSec = seg.startSec;
-    this.lastTriggeredSegId = '';
+    this.seekPlaySec(seg.playStartSec);
     this.playing = true;
     this.updatePlayButton();
-    this.syncHudImmediate();
     this.stageEl?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
@@ -180,6 +187,28 @@ class Match3DEngine {
     if (!hidden && !this.destroyed && this.renderer) {
       this.lastClockTime = performance.now();
     }
+  }
+
+  private seekPlaySec(targetPlaySec: number): void {
+    this.playSec = Math.max(0, Math.min(this.timeline.totalPlaySec, targetPlaySec));
+    this.simMatchSec = this.computeMatchSecAt(this.playSec);
+    this.lastTriggeredSegId = '';
+    const seg = this.getSegmentAtPlay(this.playSec);
+    if (seg && this.physics) {
+      this.physics.resetForSegment(seg, false);
+      this.camFocus.copy(this.physics.ballPos);
+      // Gently snap player rigs near target formation so seeking across halves doesn't walk 80m
+      const secondHalf = this.simMatchSec >= 45 * 60;
+      this.players?.rigs.forEach(rig => {
+        const s = rig.slot;
+        rig.curX = secondHalf ? -s.baseX : s.baseX;
+        rig.curZ = secondHalf ? -s.baseZ : s.baseZ;
+        rig.vx = 0;
+        rig.vz = 0;
+        rig.speed = 0;
+      });
+    }
+    this.syncHudImmediate();
   }
 
   private buildDom(container: HTMLElement, m: MatchPayload): void {
@@ -200,7 +229,6 @@ class Match3DEngine {
           </div>
 
           <div class="m3d-hud" style="position:absolute;inset:0;pointer-events:none;z-index:10">
-            <!-- Top Broadcast Scorebug (pointer-events only on interactive buttons) -->
             <div style="position:absolute;top:12px;left:12px;right:12px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap">
               <div style="pointer-events:auto;display:flex;align-items:center;background:rgba(9,18,14,0.88);border:1px solid rgba(255,255,255,0.14);border-radius:6px;overflow:hidden;color:#fff;font-size:12.5px">
                 <span style="padding:6px 9px;background:${isLive ? '#c62828' : '#1b5c3f'};font:700 11px Unbounded,sans-serif;letter-spacing:.03em;color:#fff">${isLive ? 'ЭФИР' : '3D ПОВТОР'}</span>
@@ -224,22 +252,18 @@ class Match3DEngine {
               </div>
             </div>
 
-            <!-- Goal Flash Lower-Third Banner -->
             <div class="m3d-goal-flash" style="display:none;position:absolute;left:50%;top:62px;transform:translateX(-50%);background:rgba(13,47,33,0.95);border:2px solid #f0c419;border-radius:8px;padding:10px 22px;color:#fff;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.45)">
               <div style="font:800 20px Unbounded,sans-serif;color:#f0c419;letter-spacing:.04em">ГОООЛ!</div>
               <div class="m3d-goal-team" style="font:600 13px Onest,sans-serif;color:#e7f4ec;margin-top:2px"></div>
             </div>
 
-            <!-- Live Event Commentary Ticker -->
             <div class="m3d-ticker-wrap" style="position:absolute;left:12px;right:12px;bottom:10px;display:flex;justify-content:center">
               <div class="m3d-ticker" style="background:rgba(9,18,14,0.86);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:7px 14px;color:#eef7f2;font-size:13px;line-height:1.35;max-width:760px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Подготовка к матчу…</div>
             </div>
           </div>
         </div>
 
-        <!-- Collapsible Unified Bottom Control Dock -->
         <div class="m3d-dock" style="background:#0c1914;border-top:1px solid #1e372c;color:#e4f0e9;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
-          <!-- Timeline Scrubber Bar -->
           <div style="display:flex;align-items:center;gap:10px">
             <span style="font-size:11px;font-weight:700;color:#8bb09b;min-width:28px">0'</span>
             <div class="m3d-scrub" style="position:relative;flex:1;height:14px;display:flex;align-items:center;cursor:pointer">
@@ -285,7 +309,6 @@ class Match3DEngine {
 
     this.stageEl = container.querySelector('.m3d-stage');
     this.canvasEl = container.querySelector('.m3d-canvas');
-    this.hudRootEl = container.querySelector('.m3d-hud');
     this.dockEl = container.querySelector('.m3d-dock');
     this.scoreEl = container.querySelector('.m3d-score');
     this.clockEl = container.querySelector('.m3d-clock');
@@ -307,10 +330,9 @@ class Match3DEngine {
         const act = btn.dataset.act;
         if (act === 'play') {
           this.playing = !this.playing;
-          if (this.playing && this.simSec >= this.timeline.endTimeSec - 0.5) {
+          if (this.playing && this.playSec >= this.timeline.totalPlaySec - 0.2) {
             const k0 = this.timeline.segments.find(s => s.startSec >= 0) || this.timeline.segments[0];
-            this.simSec = k0 ? k0.startSec : 0;
-            this.lastTriggeredSegId = '';
+            this.seekPlaySec(k0 ? k0.playStartSec : 0);
           }
           this.updatePlayButton();
         } else if (act === 'prev') {
@@ -320,10 +342,9 @@ class Match3DEngine {
         } else if (act === 'golive') {
           const lastSeg = this.timeline.segments[this.timeline.segments.length - 1];
           if (lastSeg) {
-            this.simSec = lastSeg.startSec;
+            this.seekPlaySec(lastSeg.playStartSec);
             this.playing = true;
             this.updatePlayButton();
-            this.syncHudImmediate();
           }
         } else if (act === 'names') {
           this.showNames = !this.showNames;
@@ -377,17 +398,12 @@ class Match3DEngine {
       };
     });
 
-    // Scrubber drag/click
     const scrub = container.querySelector('.m3d-scrub') as HTMLElement | null;
     if (scrub) {
       const seekAtClientX = (clientX: number) => {
         const rect = scrub.getBoundingClientRect();
         const pct = Math.max(0, Math.min(1, (clientX - rect.left) / Math.max(1, rect.width)));
-        const minS = Math.max(0, this.timeline.startTimeSec);
-        const maxS = Math.max(minS + 60, this.timeline.endTimeSec);
-        this.simSec = minS + pct * (maxS - minS);
-        this.lastTriggeredSegId = '';
-        this.syncHudImmediate();
+        this.seekPlaySec(pct * Math.max(1, this.timeline.totalPlaySec));
       };
       let dragging = false;
       scrub.onpointerdown = ev => {
@@ -402,7 +418,6 @@ class Match3DEngine {
       scrub.onpointercancel = () => { dragging = false; };
     }
 
-    // Keyboard shortcut [H] for HUD toggle (when not typing in an input)
     this.keyDownHandler = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -416,10 +431,9 @@ class Match3DEngine {
 
   private renderScrubberMarkers(): void {
     if (!this.scrubMarkersEl) return;
-    const minS = Math.max(0, this.timeline.startTimeSec);
-    const span = Math.max(60, this.timeline.endTimeSec - minS);
+    const total = Math.max(1, this.timeline.totalPlaySec);
     this.scrubMarkersEl.innerHTML = this.timeline.keyEventSecs.map(k => {
-      const pct = Math.max(0, Math.min(100, ((k.sec - minS) / span) * 100));
+      const pct = Math.max(0, Math.min(100, (k.playSec / total) * 100));
       const color = k.type === 'goal' || k.type === 'own_goal' ? '#f0c419' : k.type === 'red' ? '#ef4444' : '#38bdf8';
       return `<span title="${escapeHtml(k.label)}" style="position:absolute;left:${pct.toFixed(2)}%;top:-2px;width:4px;height:10px;border-radius:2px;background:${color};transform:translateX(-50%)"></span>`;
     }).join('');
@@ -428,20 +442,17 @@ class Match3DEngine {
   private stepKeyMoment(dir: -1 | 1): void {
     const keys = this.timeline.keyEventSecs;
     if (!keys.length) {
-      this.simSec = Math.max(this.timeline.startTimeSec, Math.min(this.timeline.endTimeSec, this.simSec + dir * 240));
-      this.syncHudImmediate();
+      this.seekPlaySec(this.playSec + dir * 6);
       return;
     }
     if (dir === 1) {
-      const next = keys.find(k => k.sec > this.simSec + 2) || keys[0];
-      this.simSec = next.sec;
+      const next = keys.find(k => k.playSec > this.playSec + 0.8) || keys[0];
+      this.seekPlaySec(next.playSec);
     } else {
-      const prevList = keys.filter(k => k.sec < this.simSec - 2);
+      const prevList = keys.filter(k => k.playSec < this.playSec - 0.8);
       const prev = prevList.length ? prevList[prevList.length - 1] : keys[keys.length - 1];
-      this.simSec = prev.sec;
+      this.seekPlaySec(prev.playSec);
     }
-    this.lastTriggeredSegId = '';
-    this.syncHudImmediate();
   }
 
   private updatePlayButton(): void {
@@ -468,12 +479,7 @@ class Match3DEngine {
     }
 
     this.isSoftwareGl = detectSoftwareGl(renderer);
-    if (this.isSoftwareGl) {
-      // Recreate with lightweight AA off if software fallback detected, or scale pixelRatio cleanly
-      renderer.setPixelRatio(1);
-    } else {
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    }
+    renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
 
     renderer.setSize(w, h, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -497,7 +503,6 @@ class Match3DEngine {
     const scene = new THREE.Scene();
     this.scene = scene;
 
-    // RoomEnvironment IBL for natural metallic/turf sheen
     const pmrem = new THREE.PMREMGenerator(renderer);
     const room = new RoomEnvironment();
     this.pmremEnv = pmrem.fromScene(room, 0.04);
@@ -510,7 +515,7 @@ class Match3DEngine {
     this.camera = camera;
 
     const controls = new OrbitControls(camera, this.canvasEl);
-    controls.enableDamping = true;
+    controls.enableDamping = !this.isSoftwareGl;
     controls.dampingFactor = 0.07;
     controls.maxPolarAngle = Math.PI * 0.46;
     controls.minDistance = 12;
@@ -529,6 +534,29 @@ class Match3DEngine {
     this.players = buildPlayersManager(scene, this.slots, kits, this.isSoftwareGl, atmo.tempC <= 4 || atmo.season === 'winter');
     this.players.setLabelsVisible(this.showNames);
 
+    this.physics = new MatchPhysicsWorld(atmo.weather, {
+      onKickImpact: (strength) => {
+        this.audio.playKick(strength);
+      },
+      onPostHit: (side) => {
+        this.audio.playPostPing();
+        this.stadium?.triggerGoalNet(side, 0.7);
+        this.camShake = Math.max(this.camShake, 0.45);
+      },
+      onNetHit: (side) => {
+        this.stadium?.triggerGoalNet(side, 1.45);
+        this.camShake = Math.max(this.camShake, 0.35);
+      },
+      onSaveDeflect: () => {
+        this.audio.playKick(0.85);
+        this.camShake = Math.max(this.camShake, 0.25);
+      },
+    });
+
+    if (!this.isSoftwareGl) {
+      renderer.compile(scene, camera);
+    }
+
     this.resizeObs = new ResizeObserver(() => {
       if (!this.stageEl || !this.renderer || !this.camera) return;
       const rw = Math.max(320, this.stageEl.clientWidth);
@@ -540,18 +568,26 @@ class Match3DEngine {
     this.resizeObs.observe(this.stageEl);
   }
 
-  private getSegmentAt(sec: number): PlaySegment | null {
+  private getSegmentAtPlay(pSec: number): PlaySegment | null {
     const segs = this.timeline.segments;
     if (!segs.length) return null;
     for (let i = 0; i < segs.length; i++) {
-      if (sec <= segs[i].endSec) return segs[i];
+      if (pSec <= segs[i].playEndSec) return segs[i];
     }
     return segs[segs.length - 1];
   }
 
+  private computeMatchSecAt(pSec: number): number {
+    const seg = this.getSegmentAtPlay(pSec);
+    if (!seg) return 0;
+    const span = Math.max(0.05, seg.playEndSec - seg.playStartSec);
+    const u = THREE.MathUtils.clamp((pSec - seg.playStartSec) / span, 0, 1);
+    return THREE.MathUtils.lerp(seg.startSec, seg.endSec, u);
+  }
+
   private syncHudImmediate(): void {
-    const seg = this.getSegmentAt(this.simSec);
-    if (this.clockEl) this.clockEl.textContent = formatClock(this.simSec);
+    const seg = this.getSegmentAtPlay(this.playSec);
+    if (this.clockEl) this.clockEl.textContent = formatClock(this.simMatchSec);
     if (this.scoreEl) {
       const sc = seg ? seg.score : [this.payload?.fixture.hg ?? 0, this.payload?.fixture.ag ?? 0];
       this.scoreEl.textContent = `${sc[0] ?? 0} : ${sc[1] ?? 0}`;
@@ -560,9 +596,8 @@ class Match3DEngine {
       this.tickerEl.textContent = seg.text;
     }
     if (this.scrubFillEl && this.scrubThumbEl) {
-      const minS = Math.max(0, this.timeline.startTimeSec);
-      const span = Math.max(60, this.timeline.endTimeSec - minS);
-      const pct = Math.max(0, Math.min(100, ((this.simSec - minS) / span) * 100));
+      const total = Math.max(1, this.timeline.totalPlaySec);
+      const pct = Math.max(0, Math.min(100, (this.playSec / total) * 100));
       this.scrubFillEl.style.width = `${pct.toFixed(2)}%`;
       this.scrubThumbEl.style.left = `${pct.toFixed(2)}%`;
     }
@@ -570,13 +605,12 @@ class Match3DEngine {
 
   private applySubAndCardVisibility(): void {
     if (!this.players) return;
-    // Reset to starter defaults, then replay subs & red cards up to simSec
     this.slots.forEach(s => {
       s.active = s.isStarter;
       s.sentOff = false;
     });
     for (const seg of this.timeline.segments) {
-      if (seg.startSec > this.simSec) break;
+      if (seg.playStartSec > this.playSec) break;
       if (seg.subPair) {
         const outSlot = this.slots.find(s => s.id === seg.subPair!.outId);
         const inSlot = this.slots.find(s => s.id === seg.subPair!.inId);
@@ -603,14 +637,10 @@ class Match3DEngine {
   }
 
   private stepSimulation(dt: number): void {
-    const seg = this.getSegmentAt(this.simSec);
-
-    if (this.playing && seg) {
-      // Smart pacing: compressed midfield filler, natural cinematic playback for key highlights
-      const pace = seg.isSynthesized ? 26 * this.speed : 1.55 * this.speed;
-      this.simSec += dt * pace;
-      if (this.simSec >= this.timeline.endTimeSec) {
-        this.simSec = this.timeline.endTimeSec;
+    if (this.playing) {
+      this.playSec += dt * this.speed;
+      if (this.playSec >= this.timeline.totalPlaySec) {
+        this.playSec = this.timeline.totalPlaySec;
         if (this.payload?.fixture.status !== 'live') {
           this.playing = false;
           this.updatePlayButton();
@@ -618,16 +648,17 @@ class Match3DEngine {
       }
     }
 
-    const activeSeg = this.getSegmentAt(this.simSec);
-    if (!activeSeg || !this.players || !this.stadium) return;
+    this.simMatchSec = this.computeMatchSecAt(this.playSec);
+    const activeSeg = this.getSegmentAtPlay(this.playSec);
+    if (!activeSeg || !this.players || !this.stadium || !this.physics) return;
 
     this.applySubAndCardVisibility();
 
-    // Trigger one-shot audio & visual effects on segment transitions
+    // Segment transition triggers (audio, referee cards, goal confetti, kick windup)
     if (activeSeg.id !== this.lastTriggeredSegId) {
       this.lastTriggeredSegId = activeSeg.id;
       this.syncHudImmediate();
-      if (!activeSeg.isSynthesized && this.onActiveEventChange) {
+      if (!activeSeg.isSynthesized && !activeSeg.isBuildup && this.onActiveEventChange) {
         this.onActiveEventChange(activeSeg.evIndex);
       }
 
@@ -635,8 +666,6 @@ class Match3DEngine {
         this.audio.playWhistle(activeSeg.isFulltime ? 'double' : 'long');
       } else if (activeSeg.type === 'foul' || activeSeg.isCard || activeSeg.isSetPiece === 'penalty') {
         this.audio.playWhistle('short');
-      } else if (!activeSeg.isSynthesized) {
-        this.audio.playKick(activeSeg.isGoal || activeSeg.isSave || activeSeg.isPost ? 1.1 : 0.65);
       }
 
       if (activeSeg.isCard) {
@@ -644,7 +673,6 @@ class Match3DEngine {
       }
 
       if (activeSeg.isGoal && activeSeg.goalSide) {
-        this.stadium.triggerGoalNet(activeSeg.goalSide, 1.35);
         const col = activeSeg.team === 'away'
           ? (this.payload?.fixture.awayColors?.primary || '#e53935')
           : (this.payload?.fixture.homeColors?.primary || '#1e88e5');
@@ -659,54 +687,43 @@ class Match3DEngine {
           const r = this.players.rigs.get(aid);
           if (r) r.celebrateTimer = 3.2;
         }
-      } else if (activeSeg.isPost && activeSeg.ballEnd[0] !== 0) {
-        this.audio.playPostPing();
-        this.stadium.triggerGoalNet(activeSeg.ballEnd[0] < 0 ? 'left' : 'right', 0.6);
-        this.audio.swellCrowd('chance');
-      } else if (activeSeg.isSave || activeSeg.type === 'shot') {
+      } else if (activeSeg.isPost || activeSeg.isSave || activeSeg.type === 'shot') {
         this.audio.swellCrowd('chance');
       }
 
-      // Actor kick / dive / tackle pose impulses
+      // Kick / Tackle / Dive pose synchronization
       const primaryRig = activeSeg.actorIds[0] ? this.players.rigs.get(activeSeg.actorIds[0]) : undefined;
-      if (primaryRig && !activeSeg.isCard && !activeSeg.isHalftime && !activeSeg.isFulltime) {
-        primaryRig.kickTimer = 0.42;
+      if (primaryRig && !activeSeg.isCard && !activeSeg.isHalftime && !activeSeg.isFulltime && !activeSeg.subPair) {
+        primaryRig.kickDuration = 0.56;
+        primaryRig.kickTimer = 0.56;
       }
       if (activeSeg.type === 'tackle' && primaryRig) {
-        primaryRig.tackleTimer = 0.55;
+        primaryRig.tackleTimer = 0.65;
       }
       if (activeSeg.isSave || activeSeg.isGoal) {
         const defSide = activeSeg.team === 'home' ? 'away' : 'home';
         this.players.rigs.forEach(r => {
           if (r.slot.side === defSide && r.slot.isGk) {
-            r.diveTimer = 0.95;
+            r.diveTimer = 1.05;
             r.diveDir = activeSeg.ballEnd[2] >= 0 ? 1 : -1;
           }
         });
       }
     }
 
-    // Interpolate Football 3D trajectory (parabolic height + lateral curl)
-    const segDur = Math.max(0.1, activeSeg.endSec - activeSeg.startSec);
-    const u = Math.max(0, Math.min(1, (this.simSec - activeSeg.startSec) / segDur));
-    const easeU = activeSeg.isGoal || activeSeg.isSave || activeSeg.isPost ? u : u * (2 - u);
-
-    this.prevBallPos.copy(this.ballPos);
-    const bx = THREE.MathUtils.lerp(activeSeg.ballStart[0], activeSeg.ballEnd[0], easeU);
-    const bz = THREE.MathUtils.lerp(activeSeg.ballStart[2], activeSeg.ballEnd[2], easeU)
-      + Math.sin(u * Math.PI) * activeSeg.ballCurveZ;
-    const by = THREE.MathUtils.lerp(activeSeg.ballStart[1], activeSeg.ballEnd[1], u)
-      + 4 * (activeSeg.ballPeakY - 0.24) * u * (1 - u);
-
-    this.ballPos.set(bx, Math.max(0.24, by), bz);
-    if (dt > 0.0001) {
-      this.ballVel.subVectors(this.ballPos, this.prevBallPos).divideScalar(dt);
+    // Advance sub-stepped Newtonian ball physics
+    const physDt = this.playing ? dt * Math.min(2.2, this.speed) : 0;
+    if (physDt > 0) {
+      this.physics.step(physDt, activeSeg, this.playSec - activeSeg.playStartSec);
     }
 
-    // Compute tactical target positions for all 22 players + referee
-    const secondHalf = this.simSec >= 45 * 60;
-    const shiftX = this.ballPos.x * 0.36;
-    const shiftZ = this.ballPos.z * 0.26;
+    const ballPos = this.physics.ballPos;
+    const ballVel = this.physics.ballVel;
+
+    // Tactical formation steering targets
+    const secondHalf = this.simMatchSec >= 45 * 60;
+    const shiftX = ballPos.x * 0.34;
+    const shiftZ = ballPos.z * 0.24;
     this.activeActorIds.clear();
     for (const id of activeSeg.actorIds) this.activeActorIds.add(id);
 
@@ -718,17 +735,15 @@ class Match3DEngine {
       let tz = secondHalf ? -s.baseZ : s.baseZ;
 
       if (s.isGk) {
-        // GK stays near goal line and tracks ball lateral Z
         tx = tx < 0 ? -49.2 : 49.2;
-        tz = Math.max(-3.6, Math.min(3.6, this.ballPos.z * 0.35));
+        tz = Math.max(-3.5, Math.min(3.5, ballPos.z * 0.32));
       } else {
         tx = Math.max(-47, Math.min(47, tx + shiftX));
         tz = Math.max(-31, Math.min(31, tz + shiftZ));
 
-        // Pack box during corner kicks
         if (activeSeg.isSetPiece === 'corner') {
           const targetBoxX = activeSeg.ballStart[0] > 0 ? 43 : -43;
-          if (Math.abs(tx - targetBoxX) < 35) {
+          if (Math.abs(tx - targetBoxX) < 34) {
             tx = THREE.MathUtils.lerp(tx, targetBoxX, 0.45);
             tz = THREE.MathUtils.lerp(tz, 0, 0.45);
           }
@@ -737,49 +752,57 @@ class Match3DEngine {
       this.slotTargetMap.set(s.id, [tx, tz]);
     });
 
-    // Primary ball carrier runs along ball start -> active point
     const p0Id = activeSeg.actorIds[0];
     const p1Id = activeSeg.actorIds[1];
-    if (p0Id && !activeSeg.isHalftime && !activeSeg.isFulltime) {
+    const segDurPlay = Math.max(0.1, activeSeg.playEndSec - activeSeg.playStartSec);
+    const fracPlay = THREE.MathUtils.clamp((this.playSec - activeSeg.playStartSec) / segDurPlay, 0, 1);
+
+    if (p0Id && !activeSeg.isHalftime && !activeSeg.isFulltime && !activeSeg.subPair) {
       if (activeSeg.type === 'dribble') {
-        this.slotTargetMap.set(p0Id, [this.ballPos.x, this.ballPos.z]);
+        this.slotTargetMap.set(p0Id, [ballPos.x - Math.sign(ballVel.x || 1) * 0.45, ballPos.z]);
       } else {
-        this.slotTargetMap.set(p0Id, [activeSeg.ballStart[0] - Math.sign(activeSeg.ballEnd[0] - activeSeg.ballStart[0] || 1) * 0.45, activeSeg.ballStart[2]]);
+        // Kicker steps right behind the ball before kick, then holds follow-through position
+        const kickDirX = Math.sign(activeSeg.ballEnd[0] - activeSeg.ballStart[0] || 1);
+        this.slotTargetMap.set(p0Id, [activeSeg.ballStart[0] - kickDirX * 0.55, activeSeg.ballStart[2]]);
       }
     }
-    if (p1Id && !activeSeg.isHalftime && !activeSeg.isFulltime) {
-      const p1TargetX = activeSeg.isSave ? activeSeg.ballEnd[0] : activeSeg.ballEnd[0];
-      const p1TargetZ = activeSeg.isSave ? activeSeg.ballEnd[2] : activeSeg.ballEnd[2] + (activeSeg.type === 'duel' ? 0.9 : 0);
+    if (p1Id && !activeSeg.isHalftime && !activeSeg.isFulltime && !activeSeg.subPair) {
       const p1Rig = this.players.rigs.get(p1Id);
       if (p1Rig && !p1Rig.slot.isGk) {
-        this.slotTargetMap.set(p1Id, [Math.max(-48, Math.min(48, p1TargetX)), Math.max(-31, Math.min(31, p1TargetZ))]);
+        // Receiver anticipates pass arrival spot cleanly
+        const lead = THREE.MathUtils.clamp(fracPlay * 1.15, 0, 1);
+        const rx = THREE.MathUtils.lerp(p1Rig.curX, activeSeg.ballEnd[0], 0.35 + lead * 0.65);
+        const rz = THREE.MathUtils.lerp(p1Rig.curZ, activeSeg.ballEnd[2] + (activeSeg.type === 'duel' ? 0.9 : 0), 0.35 + lead * 0.65);
+        this.slotTargetMap.set(p1Id, [Math.max(-48, Math.min(48, rx)), Math.max(-31, Math.min(31, rz))]);
       }
     }
 
-    // Smoothly damp every player toward their target
-    const moveDamp = Math.min(1, dt * 4.2);
-    this.players.rigs.forEach(rig => {
-      if (!rig.root.visible) return;
-      const target = this.slotTargetMap.get(rig.slot.id);
-      if (!target) return;
-      rig.curX = THREE.MathUtils.lerp(rig.curX, target[0], moveDamp);
-      rig.curZ = THREE.MathUtils.lerp(rig.curZ, target[1], moveDamp);
-    });
+    // Referee smart positioning
+    if (activeSeg.isCard && p0Id && this.players.rigs.get(p0Id)) {
+      const cardRig = this.players.rigs.get(p0Id)!;
+      this.refTarget[0] = cardRig.curX + 1.8;
+      this.refTarget[1] = cardRig.curZ + 1.4;
+    } else {
+      this.refTarget[0] = Math.max(-40, Math.min(40, ballPos.x - 5.0));
+      this.refTarget[1] = Math.max(-28, Math.min(28, ballPos.z - 9.0));
+    }
 
-    // Referee follows play from smart angle
-    const refTargetX = activeSeg.isCard && p0Id && this.players.rigs.get(p0Id)
-      ? this.players.rigs.get(p0Id)!.curX + 1.8
-      : Math.max(-40, Math.min(40, this.ballPos.x - 4.5));
-    const refTargetZ = activeSeg.isCard && p0Id && this.players.rigs.get(p0Id)
-      ? this.players.rigs.get(p0Id)!.curZ + 1.4
-      : Math.max(-28, Math.min(28, this.ballPos.z - 9.5));
-    this.players.refereeRig.curX = THREE.MathUtils.lerp(this.players.refereeRig.curX, refTargetX, moveDamp);
-    this.players.refereeRig.curZ = THREE.MathUtils.lerp(this.players.refereeRig.curZ, refTargetZ, moveDamp);
+    const simStepDt = this.playing ? dt * Math.min(2.2, this.speed) : 0;
+    if (simStepDt > 0) {
+      stepPlayersSteering(
+        this.players.rigs,
+        this.players.refereeRig,
+        this.slotTargetMap,
+        this.refTarget,
+        simStepDt,
+        this.physics.profile.playerTraction,
+        p0Id || null
+      );
+    }
 
     this.players.updateLabelsVisibility(this.activeActorIds, this.cameraMode === 'tactical');
-    this.players.animateRigs(dt, this.elapsedReal, p0Id || null);
+    this.players.animateRigs(dt, this.elapsedReal, p0Id || null, ballPos);
 
-    // Goal mood & flash banner decay
     this.goalMood = Math.max(0, this.goalMood - dt * 0.38);
     if (this.goalFlashEl) {
       if (this.goalBannerTimer > 0) {
@@ -792,51 +815,71 @@ class Match3DEngine {
       }
     }
 
-    this.stadium.update(dt, this.elapsedReal, this.ballPos, this.ballVel, this.goalMood);
-    this.updateCamera(dt, activeSeg);
+    this.stadium.update(dt, this.elapsedReal, ballPos, ballVel, this.goalMood, this.physics.ballQuat);
+    this.updateCamera(dt, activeSeg, ballPos);
 
-    // Refresh progress bar smoothly
-    if (this.clockEl) this.clockEl.textContent = formatClock(this.simSec);
+    if (this.clockEl) this.clockEl.textContent = formatClock(this.simMatchSec);
     if (this.scrubFillEl && this.scrubThumbEl) {
-      const minS = Math.max(0, this.timeline.startTimeSec);
-      const span = Math.max(60, this.timeline.endTimeSec - minS);
-      const pct = Math.max(0, Math.min(100, ((this.simSec - minS) / span) * 100));
+      const total = Math.max(1, this.timeline.totalPlaySec);
+      const pct = Math.max(0, Math.min(100, (this.playSec / total) * 100));
       this.scrubFillEl.style.width = `${pct.toFixed(2)}%`;
       this.scrubThumbEl.style.left = `${pct.toFixed(2)}%`;
     }
   }
 
-  private updateCamera(dt: number, activeSeg: PlaySegment): void {
+  private updateCamera(dt: number, activeSeg: PlaySegment, ballPos: THREE.Vector3): void {
     if (!this.camera || !this.controls) return;
     if (this.userCameraOverride && (this.cameraMode === 'free' || this.cameraMode === 'tactical')) {
       this.controls.update();
       return;
     }
 
-    const bx = this.ballPos.x;
-    const bz = this.ballPos.z;
-    const damp = 1 - Math.exp(-3.4 * dt);
+    // Low-pass filter focal point so camera pans smoothly like a broadcast jib operator
+    this.camFocus.x = THREE.MathUtils.damp(this.camFocus.x, ballPos.x, 4.2, dt);
+    this.camFocus.y = THREE.MathUtils.damp(this.camFocus.y, ballPos.y, 4.2, dt);
+    this.camFocus.z = THREE.MathUtils.damp(this.camFocus.z, ballPos.z, 4.2, dt);
+
+    const bx = this.camFocus.x;
+    const bz = this.camFocus.z;
+
+    if (this.camShake > 0.005) {
+      this.camShake = Math.max(0, this.camShake - dt * 2.4);
+    }
+    const shakeX = this.camShake > 0 ? Math.sin(this.elapsedReal * 52) * this.camShake * 0.35 : 0;
+    const shakeY = this.camShake > 0 ? Math.cos(this.elapsedReal * 47) * this.camShake * 0.25 : 0;
 
     if (this.cameraMode === 'tv') {
-      const boxFocus = Math.abs(bx) > 30 ? 0.72 : 1.0;
-      this.camDesiredTarget.set(bx * 0.68, 0.8, bz * 0.45);
-      this.camTarget.lerp(this.camDesiredTarget, damp);
-      this.camDesiredPos.set(bx * 0.52, 31 * boxFocus + 6, 46 * boxFocus + bz * 0.22);
-      this.camera.position.lerp(this.camDesiredPos, damp);
+      const boxFocus = Math.abs(bx) > 30 ? 0.74 : 1.0;
+      this.camDesiredTarget.set(bx * 0.68, 0.9, bz * 0.45);
+      this.camDesiredPos.set(bx * 0.52 + shakeX, 30 * boxFocus + 6 + shakeY, 45 * boxFocus + bz * 0.22);
+      this.camTarget.x = THREE.MathUtils.damp(this.camTarget.x, this.camDesiredTarget.x, 4.6, dt);
+      this.camTarget.y = THREE.MathUtils.damp(this.camTarget.y, this.camDesiredTarget.y, 4.6, dt);
+      this.camTarget.z = THREE.MathUtils.damp(this.camTarget.z, this.camDesiredTarget.z, 4.6, dt);
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.2, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.2, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 4.2, dt);
       this.camera.lookAt(this.camTarget);
     } else if (this.cameraMode === 'tactical') {
       this.camDesiredPos.set(bx * 0.22, 64, 42);
-      this.camera.position.lerp(this.camDesiredPos, damp);
       this.camDesiredTarget.set(bx * 0.25, 0, bz * 0.2);
-      this.camTarget.lerp(this.camDesiredTarget, damp);
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.0, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.0, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 4.0, dt);
+      this.camTarget.x = THREE.MathUtils.damp(this.camTarget.x, this.camDesiredTarget.x, 4.0, dt);
+      this.camTarget.y = THREE.MathUtils.damp(this.camTarget.y, this.camDesiredTarget.y, 4.0, dt);
+      this.camTarget.z = THREE.MathUtils.damp(this.camTarget.z, this.camDesiredTarget.z, 4.0, dt);
       this.camera.lookAt(this.camTarget);
     } else if (this.cameraMode === 'goal') {
       const atkRight = activeSeg.ballEnd[0] >= 0;
       const gCamX = atkRight ? 61 : -61;
-      this.camDesiredPos.set(gCamX, 11.5, bz * 0.35);
-      this.camera.position.lerp(this.camDesiredPos, damp);
+      this.camDesiredPos.set(gCamX + shakeX, 11.5 + shakeY, bz * 0.35);
       this.camDesiredTarget.set(bx * 0.7, 1.2, bz * 0.5);
-      this.camTarget.lerp(this.camDesiredTarget, damp);
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.5, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.5, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 4.5, dt);
+      this.camTarget.x = THREE.MathUtils.damp(this.camTarget.x, this.camDesiredTarget.x, 4.5, dt);
+      this.camTarget.y = THREE.MathUtils.damp(this.camTarget.y, this.camDesiredTarget.y, 4.5, dt);
+      this.camTarget.z = THREE.MathUtils.damp(this.camTarget.z, this.camDesiredTarget.z, 4.5, dt);
       this.camera.lookAt(this.camTarget);
     } else {
       this.controls.update();
@@ -846,15 +889,34 @@ class Match3DEngine {
   private startLoop(): void {
     this.lastClockTime = performance.now();
     const afterDraw = (cb: () => void) => {
-      this.rafId = requestAnimationFrame(() => {
-        this.afterDrawTimeout = window.setTimeout(cb, 0);
-      });
+      if (!this.renderer) return;
+      const gl = this.renderer.getContext() as WebGL2RenderingContext;
+      if (gl && typeof gl.fenceSync === 'function') {
+        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        const poll = () => {
+          if (this.destroyed) {
+            if (sync) gl.deleteSync(sync);
+            return;
+          }
+          const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
+          if (state === gl.UNSIGNALED) {
+            this.afterDrawTimeout = window.setTimeout(poll, 5);
+          } else {
+            if (sync) gl.deleteSync(sync);
+            this.afterDrawTimeout = window.setTimeout(cb, 80);
+          }
+        };
+        this.afterDrawTimeout = window.setTimeout(poll, 5);
+      } else {
+        this.afterDrawTimeout = window.setTimeout(cb, 80);
+      }
     };
 
     const tick = () => {
       if (this.destroyed) return;
       const now = performance.now();
-      const dt = Math.min(0.08, Math.max(0.001, (now - this.lastClockTime) / 1000));
+      const dt = Math.min(0.05, Math.max(0.001, (now - this.lastClockTime) / 1000));
       this.lastClockTime = now;
 
       if (!this.hiddenPaused && !this.contextLost && this.renderer && this.scene && this.camera) {
@@ -889,6 +951,7 @@ class Match3DEngine {
     this.stadium = null;
     this.players?.dispose();
     this.players = null;
+    this.physics = null;
     this.controls?.dispose();
     this.controls = null;
     this.pmremEnv?.dispose();

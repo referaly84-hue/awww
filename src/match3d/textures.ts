@@ -345,20 +345,86 @@ export function makeAdBoardTexture(
 }
 
 export function makeJerseyBackTexture(num: number, bgHex: string, textHex: string): THREE.CanvasTexture {
-  const s = 128;
+  return makePlayerKitTexture(num, bgHex, textHex, textHex);
+}
+
+export function makePlayerKitTexture(
+  num: number,
+  primaryHex: string,
+  secondaryHex: string,
+  textHex: string,
+  isGk = false
+): THREE.CanvasTexture {
+  const w = 256;
+  const h = 256;
   const canvas = document.createElement('canvas');
-  canvas.width = s;
-  canvas.height = s;
+  canvas.width = w;
+  canvas.height = h;
   const ctx = canvas.getContext('2d')!;
-  ctx.fillStyle = bgHex;
-  ctx.fillRect(0, 0, s, s);
+
+  // Base jersey fabric
+  ctx.fillStyle = primaryHex;
+  ctx.fillRect(0, 0, w, h);
+
+  // Subtle vertical knit texture
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  for (let x = 0; x < w; x += 6) ctx.fillRect(x, 0, 2, h);
+
+  // Cylindrical UV wrap: u=0.0..0.5 covers back (-Z) or front (+Z) depending on seam.
+  // With Lathe/loft seam at +X (angle 0 -> +Z -> -X -> -Z -> +X):
+  // u = 0.25 is front (+Z center), u = 0.75 is back (-Z center).
+  const frontCx = w * 0.25;
+  const backCx = w * 0.75;
+
+  // Front chest accent sash / stripe + GK pattern
+  ctx.fillStyle = secondaryHex || '#ffffff';
+  ctx.globalAlpha = isGk ? 0.22 : 0.16;
+  ctx.fillRect(frontCx - 44, h * 0.16, 88, 18);
+  if (isGk) {
+    ctx.fillRect(frontCx - 44, h * 0.34, 88, 12);
+    ctx.fillRect(frontCx - 44, h * 0.50, 88, 12);
+  }
+  ctx.globalAlpha = 1;
+
+  // Club crest badge on left chest (from player's perspective -> slightly +X from frontCx)
+  ctx.fillStyle = secondaryHex || '#f0c419';
+  ctx.beginPath();
+  ctx.arc(frontCx + 18, h * 0.24, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = textHex;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Sponsor subtle bar across front chest
   ctx.fillStyle = textHex;
-  ctx.font = '800 66px Unbounded, system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(String(num), s / 2, s / 2 + 4);
+  ctx.globalAlpha = 0.78;
+  ctx.fillRect(frontCx - 24, h * 0.42, 48, 8);
+  ctx.globalAlpha = 1;
+
+  // Collar trim along top edge
+  ctx.fillStyle = secondaryHex || textHex;
+  ctx.fillRect(0, 0, w, 16);
+
+  // Crisp squad number centered on back (u = 0.75)
+  if (num > 0) {
+    ctx.fillStyle = textHex;
+    ctx.font = '800 84px Unbounded, system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(num), backCx, h * 0.46);
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(String(num), backCx, h * 0.46);
+  } else {
+    // Referee pocket badge
+    ctx.fillStyle = '#facc15';
+    ctx.fillRect(frontCx - 22, h * 0.22, 12, 16);
+  }
+
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;
 }

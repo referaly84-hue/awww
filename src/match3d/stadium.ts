@@ -173,7 +173,7 @@ export interface StadiumRig {
   flagCloths: THREE.Mesh[];
   triggerGoalNet: (side: 'left' | 'right', strength?: number) => void;
   triggerConfetti: (side: 'left' | 'right', colorHex: string) => void;
-  update: (dt: number, elapsed: number, ballPos: THREE.Vector3, ballVel: THREE.Vector3, goalMood: number) => void;
+  update: (dt: number, elapsed: number, ballPos: THREE.Vector3, ballVel: THREE.Vector3, goalMood: number, ballQuat?: THREE.Quaternion) => void;
   dispose: () => void;
 }
 
@@ -647,7 +647,7 @@ export function buildStadiumAndAtmosphere(
 
   // Match Football (High-vis orange winter ball in snow/blizzard, classic white otherwise)
   const ballTex = track(makeBallTexture(maxAnisotropy, atmo.useOrangeBall));
-  const ballGeo = track(new THREE.SphereGeometry(0.24, 24, 18));
+  const ballGeo = track(new THREE.SphereGeometry(0.22, 24, 18));
   const ballMat = track(new THREE.MeshStandardMaterial({
     map: ballTex,
     roughness: 0.36,
@@ -655,7 +655,7 @@ export function buildStadiumAndAtmosphere(
   }));
   const ballMesh = new THREE.Mesh(ballGeo, ballMat);
   ballMesh.castShadow = !isSoftwareGl;
-  ballMesh.position.set(0, 0.24, 0);
+  ballMesh.position.set(0, 0.22, 0);
   root.add(ballMesh);
 
   const ballShadowGeo = track(new THREE.CircleGeometry(0.36, 16));
@@ -764,15 +764,19 @@ export function buildStadiumAndAtmosphere(
     attr.needsUpdate = true;
   };
 
-  const update = (dt: number, elapsed: number, ballPos: THREE.Vector3, ballVel: THREE.Vector3, goalMood: number) => {
+  const update = (dt: number, elapsed: number, ballPos: THREE.Vector3, ballVel: THREE.Vector3, goalMood: number, ballQuat?: THREE.Quaternion) => {
     ballMesh.position.copy(ballPos);
-    const speed = Math.hypot(ballVel.x, ballVel.z);
-    if (speed > 0.05) {
-      ballMesh.rotation.z -= (ballVel.x * dt) / 0.24;
-      ballMesh.rotation.x += (ballVel.z * dt) / 0.24;
+    if (ballQuat) {
+      ballMesh.quaternion.copy(ballQuat);
+    } else {
+      const speed = Math.hypot(ballVel.x, ballVel.z);
+      if (speed > 0.05) {
+        ballMesh.rotation.z -= (ballVel.x * dt) / 0.22;
+        ballMesh.rotation.x += (ballVel.z * dt) / 0.22;
+      }
     }
     ballShadow.position.set(ballPos.x, 0.02, ballPos.z);
-    const hRatio = Math.max(0.35, 1 - Math.max(0, ballPos.y - 0.24) * 0.09);
+    const hRatio = Math.max(0.35, 1 - Math.max(0, ballPos.y - 0.22) * 0.09);
     ballShadow.scale.setScalar(hRatio);
     ballShadowMat.opacity = 0.42 * hRatio;
 

@@ -118,8 +118,16 @@ export interface ResolvedAtmosphere {
 export interface PlaySegment {
   id: string;
   evIndex: number;
+  /** Match clock timestamps in match-seconds (0..5400+) */
   startSec: number;
   endSec: number;
+  /** Continuous real-time playback seconds (for smooth physics without speed jumps) */
+  playStartSec: number;
+  playEndSec: number;
+  /** Fraction [0..0.4] within playback duration before the ball is struck (run-up / setup) */
+  kickAtFrac: number;
+  /** Target flight duration in real seconds after the kick */
+  flightDurSec: number;
   type: string;
   team: 'home' | 'away' | 'none';
   text: string;
@@ -140,6 +148,7 @@ export interface PlaySegment {
   subPair?: { inId: string; outId: string; side: 'home' | 'away' };
   goalSide?: 'left' | 'right';
   isSynthesized?: boolean;
+  isBuildup?: boolean;
 }
 
 export interface PlayerSlot {
@@ -160,20 +169,33 @@ export interface PlayerSlot {
 export interface PlayerRig {
   slot: PlayerSlot;
   root: THREE.Group;
+  hips: THREE.Group;
   bodyPivot: THREE.Group;
+  torsoGroup: THREE.Group;
+  neckHeadGroup: THREE.Group;
   leftArm: THREE.Group;
+  leftForearm: THREE.Group;
   rightArm: THREE.Group;
+  rightForearm: THREE.Group;
   leftLeg: THREE.Group;
+  leftShin: THREE.Group;
   rightLeg: THREE.Group;
+  rightShin: THREE.Group;
   shadowDisc: THREE.Mesh;
   nameSprite: THREE.Sprite;
   cardMesh?: THREE.Mesh;
   curX: number;
   curZ: number;
   curY: number;
+  vx: number;
+  vz: number;
+  speed: number;
   facing: number;
+  turnLean: number;
   stridePhase: number;
+  breathPhase: number;
   kickTimer: number;
+  kickDuration: number;
   celebrateTimer: number;
   diveTimer: number;
   diveDir: number;
