@@ -64,8 +64,15 @@ export function makePitchTexture(
     ctx.fillRect(w - mx, mz, mx, ph);
   }
 
-  // Subtle turf blade grain & seasonal texture (autumn leaves speckle or snow patches)
+  // Natural six-yard & penalty spot turf wear + subtle grass grain
   ctx.save();
+  for (const wearX of [mx + 3.8 * (pw / PITCH_LEN), mx + pw - 3.8 * (pw / PITCH_LEN)]) {
+    const grad = ctx.createRadialGradient(wearX, mz + ph / 2, 4, wearX, mz + ph / 2, 7.5 * (pw / PITCH_LEN));
+    grad.addColorStop(0, isSnow ? 'rgba(130, 120, 95, 0.25)' : 'rgba(110, 92, 54, 0.28)');
+    grad.addColorStop(1, 'rgba(110, 92, 54, 0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(wearX - 10 * (pw / PITCH_LEN), mz + ph * 0.3, 20 * (pw / PITCH_LEN), ph * 0.4);
+  }
   for (let i = 0; i < 6500; i++) {
     const gx = (Math.sin(i * 12.9898) * 43758.5453) % 1;
     const gy = (Math.sin(i * 78.233) * 24634.6345) % 1;
@@ -78,7 +85,7 @@ export function makePitchTexture(
       ctx.fillStyle = i % 22 === 0 ? 'rgba(217, 119, 6, 0.35)' : 'rgba(180, 83, 9, 0.28)';
       ctx.fillRect(rx, ry, 5, 4);
     } else {
-      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.04)';
+      ctx.fillStyle = i % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.045)';
       ctx.fillRect(rx, ry, 3, 2);
     }
   }
@@ -168,6 +175,53 @@ export function makePitchRoughnessTexture(maxAnisotropy: number, isWet = false):
     ctx.fillRect(i * sw, 0, sw + 1, h);
   }
   const tex = new THREE.CanvasTexture(canvas);
+  tex.anisotropy = maxAnisotropy;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+export function makePitchNormalTexture(maxAnisotropy: number): THREE.DataTexture {
+  const size = 256;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const h = Math.sin(x * 0.73 + y * 0.31) * 0.5 + Math.cos(x * 1.41 - y * 0.92) * 0.5;
+      const nx = Math.max(0, Math.min(255, Math.round(128 + h * 36)));
+      const ny = Math.max(0, Math.min(255, Math.round(128 + Math.cos(y * 1.15 + x * 0.44) * 32)));
+      data[idx] = nx;
+      data[idx + 1] = ny;
+      data[idx + 2] = 242;
+      data[idx + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(64, 42);
+  tex.anisotropy = maxAnisotropy;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+export function makeBallNormalTexture(maxAnisotropy: number): THREE.DataTexture {
+  const size = 128;
+  const data = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const idx = (y * size + x) * 4;
+      const gx = Math.sin((x / size) * Math.PI * 12);
+      const gy = Math.sin((y / size) * Math.PI * 6);
+      const seam = Math.abs(gx) < 0.08 || Math.abs(gy) < 0.08 ? -45 : 0;
+      data[idx] = Math.max(0, Math.min(255, 128 + Math.round(gx * 24) + seam));
+      data[idx + 1] = Math.max(0, Math.min(255, 128 + Math.round(gy * 24) + seam));
+      data[idx + 2] = 238;
+      data[idx + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
   tex.anisotropy = maxAnisotropy;
   tex.needsUpdate = true;
   return tex;

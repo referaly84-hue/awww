@@ -144,6 +144,56 @@ const SKIN_TONES = ['#f2c9a6', '#e6b48c', '#d4996e', '#a9704b', '#6d442b'];
 const HAIR_TONES = ['#1a1614', '#382518', '#5c3c24', '#b88948', '#111827'];
 const BOOT_ACCENTS = [0x38bdf8, 0xfacc15, 0xf97316, 0x22c55e, 0xe11d48, 0xf8fafc];
 
+function makeFaceTexture(skinHex: string, hairHex: string, hasBeard: boolean): THREE.CanvasTexture {
+  const w = 128;
+  const h = 128;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = skinHex;
+  ctx.fillRect(0, 0, w, h);
+
+  // Front of SphereGeometry (+Z corresponds to u = 0.25)
+  const fx = w * 0.25;
+
+  // Subtle cheek warmth
+  ctx.fillStyle = 'rgba(185, 85, 70, 0.14)';
+  ctx.beginPath();
+  ctx.arc(fx - w * 0.07, h * 0.56, 7, 0, Math.PI * 2);
+  ctx.arc(fx + w * 0.07, h * 0.56, 7, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyebrows
+  ctx.fillStyle = hairHex;
+  ctx.fillRect(fx - 13, h * 0.41, 9, 2.5);
+  ctx.fillRect(fx + 4, h * 0.41, 9, 2.5);
+  // Eyes
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(fx - 11, h * 0.46, 6, 3);
+  ctx.fillRect(fx + 5, h * 0.46, 6, 3);
+  ctx.fillStyle = '#1e1b18';
+  ctx.fillRect(fx - 9, h * 0.46, 3, 3);
+  ctx.fillRect(fx + 7, h * 0.46, 3, 3);
+  // Subtle mouth
+  ctx.fillStyle = 'rgba(130, 58, 52, 0.65)';
+  ctx.fillRect(fx - 5, h * 0.64, 10, 2.2);
+
+  if (hasBeard) {
+    ctx.fillStyle = hairHex;
+    ctx.globalAlpha = 0.28;
+    ctx.beginPath();
+    ctx.arc(fx, h * 0.66, 14, 0, Math.PI);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export interface PlayersManager {
   group: THREE.Group;
   rigs: Map<string, PlayerRig>;
@@ -287,16 +337,46 @@ export function buildPlayersManager(
 
     const textLum = relLuminance(jerseyHex) > 0.5 ? '#0f172a' : '#ffffff';
     const kitTex = track(makePlayerKitTexture(slot.number, jerseyHex, secondaryHex, textLum, slot.isGk));
-    const torsoMat = track(new THREE.MeshStandardMaterial({ map: kitTex, roughness: 0.72, metalness: 0.04 }));
-    const jerseyMat = track(new THREE.MeshStandardMaterial({ color: jerseyHex, roughness: 0.72, metalness: 0.04 }));
+    const faceTex = track(makeFaceTexture(skinHex, hairHex, Math.abs(hash >> 9) % 3 === 0));
+    const sheenCol = new THREE.Color(jerseyHex).lerp(new THREE.Color(0xffffff), 0.55);
+    const torsoMat = track(new THREE.MeshPhysicalMaterial({
+      map: kitTex,
+      roughness: 0.72,
+      metalness: 0.02,
+      sheen: 0.68,
+      sheenRoughness: 0.58,
+      sheenColor: sheenCol,
+    }));
+    const jerseyMat = track(new THREE.MeshPhysicalMaterial({
+      color: jerseyHex,
+      roughness: 0.72,
+      metalness: 0.02,
+      sheen: 0.68,
+      sheenRoughness: 0.58,
+      sheenColor: sheenCol,
+    }));
     const collarMat = track(new THREE.MeshStandardMaterial({ color: secondaryHex || textLum, roughness: 0.68, metalness: 0.04 }));
-    const shortsMat = track(new THREE.MeshStandardMaterial({ color: shortsHex, roughness: 0.76, metalness: 0.03 }));
-    const socksMat = track(new THREE.MeshStandardMaterial({ color: socksHex, roughness: 0.74, metalness: 0.03 }));
-    const skinMat = track(new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.62, metalness: 0.02 }));
-    const hairMat = track(new THREE.MeshStandardMaterial({ color: hairHex, roughness: 0.85, metalness: 0.02 }));
-    const bootMat = track(new THREE.MeshStandardMaterial({ color: bootColor, roughness: 0.38, metalness: 0.18 }));
+    const shortsMat = track(new THREE.MeshPhysicalMaterial({
+      color: shortsHex,
+      roughness: 0.76,
+      metalness: 0.02,
+      sheen: 0.45,
+      sheenRoughness: 0.65,
+      sheenColor: new THREE.Color(shortsHex).lerp(new THREE.Color(0xffffff), 0.4),
+    }));
+    const socksMat = track(new THREE.MeshStandardMaterial({ color: socksHex, roughness: 0.78, metalness: 0.02 }));
+    const skinMat = track(new THREE.MeshStandardMaterial({ color: skinHex, roughness: 0.56, metalness: 0.02 }));
+    const faceMat = track(new THREE.MeshStandardMaterial({ map: faceTex, roughness: 0.54, metalness: 0.02 }));
+    const hairMat = track(new THREE.MeshStandardMaterial({ color: hairHex, roughness: 0.84, metalness: 0.02 }));
+    const bootMat = track(new THREE.MeshPhysicalMaterial({
+      color: bootColor,
+      roughness: 0.28,
+      metalness: 0.22,
+      clearcoat: 0.85,
+      clearcoatRoughness: 0.16,
+    }));
     const gloveMat = slot.isGk
-      ? track(new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.52, metalness: 0.05 }))
+      ? track(new THREE.MeshPhysicalMaterial({ color: 0xf8fafc, roughness: 0.46, metalness: 0.05, clearcoat: 0.25 }))
       : null;
 
     // Pelvis / Shorts waist
@@ -326,7 +406,7 @@ export function buildPlayersManager(
     neck.position.y = 0.05;
     neckHeadGroup.add(neck);
 
-    const head = new THREE.Mesh(headGeo, skinMat);
+    const head = new THREE.Mesh(headGeo, faceMat);
     head.position.set(0, 0.195, 0.006);
     head.scale.set(0.92, 1.09, 0.98);
     head.castShadow = !isSoftwareGl;

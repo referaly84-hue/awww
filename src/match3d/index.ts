@@ -1,11 +1,16 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { MatchAudioEngine } from './audio';
 import { buildMatchTimeline, buildPlayerSlots, type TimelineBuild } from './choreography';
 import { buildDemoMatch, type DemoPresetId } from './demo';
 import { MatchPhysicsWorld, stepPlayersSteering } from './physics';
 import { buildPlayersManager, resolveMatchKits, setRefereeCardColor, type PlayersManager } from './players';
+import { BroadcastCasVignetteShader, createStadiumEnvironmentTexture } from './shaders';
 import { buildStadiumAndAtmosphere, resolveAtmosphere, type StadiumRig } from './stadium';
 import type { CameraMode, MatchEvent, MatchPayload, PlayerSlot, PlaySegment } from './types';
 
@@ -40,6 +45,11 @@ class Match3DEngine {
   private timeline: TimelineBuild = { segments: [], startTimeSec: 0, endTimeSec: 5400, totalPlaySec: 10, keyEventSecs: [] };
 
   private renderer: THREE.WebGLRenderer | null = null;
+  private composer: EffectComposer | null = null;
+  private composerRt: THREE.WebGLRenderTarget | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
+  private casPass: ShaderPass | null = null;
+
   private scene: THREE.Scene | null = null;
   private camera: THREE.PerspectiveCamera | null = null;
   private controls: OrbitControls | null = null;
@@ -50,6 +60,7 @@ class Match3DEngine {
   private audio = new MatchAudioEngine();
 
   private isSoftwareGl = false;
+  private rtxEnabled = true;
   private resizeObs: ResizeObserver | null = null;
   private rafId = 0;
   private afterDrawTimeout = 0;
@@ -74,11 +85,14 @@ class Match3DEngine {
   private goalBannerTeam = '';
   private goalMood = 0;
   private camShake = 0;
+  private actionCamTimer = 0;
+  private shotSpeedTimer = 0;
+  private shotSpeedKmh = 0;
   private onActiveEventChange?: (evIndex: number) => void;
 
   // Pre-allocated math objects (zero GC in tick loop)
   private readonly camTarget = new THREE.Vector3(0, 0.8, 0);
-  private readonly camDesiredPos = new THREE.Vector3(0, 32, 48);
+  private readonly camDesiredPos = new THREE.Vector3(0, 34, 62);
   private readonly camDesiredTarget = new THREE.Vector3(0, 0.8, 0);
   private readonly camFocus = new THREE.Vector3(0, 0.22, 0);
   private readonly activeActorIds = new Set<string>();
@@ -93,6 +107,7 @@ class Match3DEngine {
   private clockEl: HTMLElement | null = null;
   private tickerEl: HTMLElement | null = null;
   private goalFlashEl: HTMLElement | null = null;
+  private shotBadgeEl: HTMLElement | null = null;
   private scrubFillEl: HTMLElement | null = null;
   private scrubThumbEl: HTMLElement | null = null;
   private scrubMarkersEl: HTMLElement | null = null;
@@ -139,6 +154,8 @@ class Match3DEngine {
     this.goalBannerTimer = 0;
     this.goalMood = 0;
     this.camShake = 0;
+    this.actionCamTimer = 0;
+    this.shotSpeedTimer = 0;
 
     this.buildDom(container, payload);
     this.initThree(payload);
@@ -193,11 +210,11 @@ class Match3DEngine {
     this.playSec = Math.max(0, Math.min(this.timeline.totalPlaySec, targetPlaySec));
     this.simMatchSec = this.computeMatchSecAt(this.playSec);
     this.lastTriggeredSegId = '';
+    this.actionCamTimer = 0;
     const seg = this.getSegmentAtPlay(this.playSec);
     if (seg && this.physics) {
       this.physics.resetForSegment(seg, false);
       this.camFocus.copy(this.physics.ballPos);
-      // Gently snap player rigs near target formation so seeking across halves doesn't walk 80m
       const secondHalf = this.simMatchSec >= 45 * 60;
       this.players?.rigs.forEach(rig => {
         const s = rig.slot;
@@ -219,8 +236,8 @@ class Match3DEngine {
     const isLive = f.status === 'live';
 
     container.innerHTML = `
-      <div class="m3d-shell" style="position:relative;border-radius:12px;overflow:hidden;background:#08120e;border:1px solid #20382d;box-shadow:0 8px 28px rgba(10,25,18,0.28);margin-bottom:16px;user-select:none">
-        <div class="m3d-stage" style="position:relative;width:100%;height:clamp(340px,54vh,560px);background:#091321">
+      <div class="m3d-shell" style="position:relative;border-radius:12px;overflow:hidden;background:#08120e;border:1px solid #20382d;box-shadow:0 12px 34px rgba(10,25,18,0.34);margin-bottom:16px;user-select:none">
+        <div class="m3d-stage" style="position:relative;width:100%;height:clamp(360px,58vh,600px);background:#091321">
           <canvas class="m3d-canvas" style="display:block;width:100%;height:100%;touch-action:none"></canvas>
 
           <div class="m3d-fallback" style="display:none;position:absolute;inset:0;background:#0c1713;color:#e2eee7;flex-direction:column;align-items:center;justify-content:center;padding:24px;text-align:center;gap:8px;z-index:25">
@@ -230,35 +247,36 @@ class Match3DEngine {
 
           <div class="m3d-hud" style="position:absolute;inset:0;pointer-events:none;z-index:10">
             <div style="position:absolute;top:12px;left:12px;right:12px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;flex-wrap:wrap">
-              <div style="pointer-events:auto;display:flex;align-items:center;background:rgba(9,18,14,0.88);border:1px solid rgba(255,255,255,0.14);border-radius:6px;overflow:hidden;color:#fff;font-size:12.5px">
-                <span style="padding:6px 9px;background:${isLive ? '#c62828' : '#1b5c3f'};font:700 11px Unbounded,sans-serif;letter-spacing:.03em;color:#fff">${isLive ? 'ЭФИР' : '3D ПОВТОР'}</span>
+              <div style="pointer-events:auto;display:flex;align-items:center;background:rgba(8,14,12,0.90);border:1px solid rgba(255,255,255,0.16);border-radius:6px;overflow:hidden;color:#fff;font-size:12.5px">
+                <span style="padding:6px 9px;background:${isLive ? '#c62828' : '#1b5c3f'};font:700 11px Unbounded,sans-serif;letter-spacing:.04em;color:#fff">${isLive ? 'ПРЯМОЙ ЭФИР' : 'РПЛ HD'}</span>
                 <span style="width:5px;align-self:stretch;background:${escapeHtml(hCol)}"></span>
                 <span style="padding:6px 10px;font-weight:700;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.homeName)}</span>
-                <span class="m3d-score" style="padding:5px 10px;background:rgba(255,255,255,0.1);font:800 15px Unbounded,sans-serif;color:#f0c419">0 : 0</span>
+                <span class="m3d-score" style="padding:5px 10px;background:rgba(255,255,255,0.12);font:800 15px Unbounded,sans-serif;color:#f0c419">0 : 0</span>
                 <span style="padding:6px 10px;font-weight:700;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.awayName)}</span>
                 <span style="width:5px;align-self:stretch;background:${escapeHtml(aCol)}"></span>
-                <span class="m3d-clock" style="padding:6px 10px;background:rgba(0,0,0,0.35);font:700 12px ui-monospace,Consolas,monospace;color:#cfe8d9;min-width:58px;text-align:center">00:00</span>
+                <span class="m3d-clock" style="padding:6px 10px;background:rgba(0,0,0,0.42);font:700 12px ui-monospace,Consolas,monospace;color:#cfe8d9;min-width:58px;text-align:center">00:00</span>
               </div>
 
               <div style="pointer-events:auto;display:flex;align-items:center;gap:6px">
+                <span class="m3d-shot-badge" style="display:none;padding:5px 9px;background:rgba(15,23,42,0.9);border:1px solid rgba(240,196,25,0.55);border-radius:6px;color:#f0c419;font:700 11.5px Unbounded,sans-serif"></span>
                 ${(() => {
                   const at = resolveAtmosphere(m);
                   const tStr = `${at.tempC > 0 ? '+' : ''}${at.tempC}°C`;
                   const sMap = { winter: 'Зима', spring: 'Весна', summer: 'Лето', autumn: 'Осень' };
-                  return `<span style="padding:5px 9px;background:rgba(9,18,14,0.82);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#cde0d5;font-size:11.5px;white-space:nowrap">${escapeHtml(at.city)} · ${sMap[at.season]} · ${tStr} · ${escapeHtml(at.conditionLabel || weatherStr.split(',')[0])}</span>`;
+                  return `<span style="padding:5px 9px;background:rgba(8,14,12,0.84);border:1px solid rgba(255,255,255,0.12);border-radius:6px;color:#cde0d5;font-size:11.5px;white-space:nowrap">${escapeHtml(at.city)} · ${sMap[at.season]} · ${tStr} · ${escapeHtml(at.conditionLabel || weatherStr.split(',')[0])}</span>`;
                 })()}
-                <button type="button" data-act="toggle-hud" title="Скрыть/показать интерфейс [H]" style="cursor:pointer;padding:6px 10px;background:rgba(9,18,14,0.84);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">HUD</button>
-                <button type="button" data-act="fullscreen" title="Во весь экран" style="cursor:pointer;padding:6px 10px;background:rgba(9,18,14,0.84);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">⛶</button>
+                <button type="button" data-act="toggle-hud" title="Скрыть/показать интерфейс [H]" style="cursor:pointer;padding:6px 10px;background:rgba(8,14,12,0.86);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">HUD</button>
+                <button type="button" data-act="fullscreen" title="Во весь экран" style="cursor:pointer;padding:6px 10px;background:rgba(8,14,12,0.86);border:1px solid rgba(255,255,255,0.16);border-radius:6px;color:#e6f2ec;font-size:12px;font-weight:600">⛶</button>
               </div>
             </div>
 
-            <div class="m3d-goal-flash" style="display:none;position:absolute;left:50%;top:62px;transform:translateX(-50%);background:rgba(13,47,33,0.95);border:2px solid #f0c419;border-radius:8px;padding:10px 22px;color:#fff;text-align:center;box-shadow:0 8px 24px rgba(0,0,0,0.45)">
-              <div style="font:800 20px Unbounded,sans-serif;color:#f0c419;letter-spacing:.04em">ГОООЛ!</div>
+            <div class="m3d-goal-flash" style="display:none;position:absolute;left:50%;top:62px;transform:translateX(-50%);background:rgba(10,36,26,0.96);border:2px solid #f0c419;border-radius:8px;padding:10px 24px;color:#fff;text-align:center;box-shadow:0 10px 28px rgba(0,0,0,0.5)">
+              <div style="font:800 22px Unbounded,sans-serif;color:#f0c419;letter-spacing:.05em">ГОООЛ!</div>
               <div class="m3d-goal-team" style="font:600 13px Onest,sans-serif;color:#e7f4ec;margin-top:2px"></div>
             </div>
 
             <div class="m3d-ticker-wrap" style="position:absolute;left:12px;right:12px;bottom:10px;display:flex;justify-content:center">
-              <div class="m3d-ticker" style="background:rgba(9,18,14,0.86);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:7px 14px;color:#eef7f2;font-size:13px;line-height:1.35;max-width:760px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Подготовка к матчу…</div>
+              <div class="m3d-ticker" style="background:rgba(8,14,12,0.88);border:1px solid rgba(255,255,255,0.14);border-radius:6px;padding:7px 14px;color:#eef7f2;font-size:13px;line-height:1.35;max-width:760px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Подготовка к матчу…</div>
             </div>
           </div>
         </div>
@@ -298,6 +316,7 @@ class Match3DEngine {
                 ].map(([cm, lbl]) => `<button type="button" data-cam="${cm}" style="cursor:pointer;padding:5px 9px;border:0;background:${cm === this.cameraMode ? '#2f7d55' : '#152a21'};color:#fff;font-size:11.5px;font-weight:600">${lbl}</button>`).join('')}
               </div>
 
+              <button type="button" data-act="rtx" title="HDR Bloom + DLSS-CAS Sharpening" style="cursor:pointer;padding:5px 9px;background:${this.rtxEnabled ? '#1d4ed8' : '#152a21'};border:1px solid ${this.rtxEnabled ? '#3b82f6' : '#28493a'};border-radius:6px;color:#ffffff;font-size:11.5px;font-weight:700">RTX + CAS</button>
               <button type="button" data-act="names" style="cursor:pointer;padding:5px 9px;background:${this.showNames ? '#234436' : '#152a21'};border:1px solid #28493a;border-radius:6px;color:#e4f0e9;font-size:11.5px;font-weight:600">Имена</button>
               <button type="button" data-act="sound" style="cursor:pointer;padding:5px 9px;background:${this.audio.isEnabled() ? '#234436' : '#152a21'};border:1px solid #28493a;border-radius:6px;color:#e4f0e9;font-size:11.5px;font-weight:600">${this.audio.isEnabled() ? 'Звук вкл' : 'Звук'}</button>
               <button type="button" data-act="collapse" title="Свернуть/развернуть панель" style="cursor:pointer;padding:5px 8px;background:#152a21;border:1px solid #28493a;border-radius:6px;color:#9bb3a5;font-size:11.5px;font-weight:700">▾</button>
@@ -314,6 +333,7 @@ class Match3DEngine {
     this.clockEl = container.querySelector('.m3d-clock');
     this.tickerEl = container.querySelector('.m3d-ticker');
     this.goalFlashEl = container.querySelector('.m3d-goal-flash');
+    this.shotBadgeEl = container.querySelector('.m3d-shot-badge');
     this.scrubFillEl = container.querySelector('.m3d-scrub-fill');
     this.scrubThumbEl = container.querySelector('.m3d-scrub-thumb');
     this.scrubMarkersEl = container.querySelector('.m3d-scrub-markers');
@@ -346,6 +366,10 @@ class Match3DEngine {
             this.playing = true;
             this.updatePlayButton();
           }
+        } else if (act === 'rtx') {
+          this.rtxEnabled = !this.rtxEnabled;
+          btn.style.background = this.rtxEnabled ? '#1d4ed8' : '#152a21';
+          btn.style.borderColor = this.rtxEnabled ? '#3b82f6' : '#28493a';
         } else if (act === 'names') {
           this.showNames = !this.showNames;
           this.players?.setLabelsVisible(this.showNames);
@@ -464,7 +488,7 @@ class Match3DEngine {
     if (!this.canvasEl || !this.stageEl) return;
 
     const w = Math.max(320, this.stageEl.clientWidth || 800);
-    const h = Math.max(260, this.stageEl.clientHeight || 440);
+    const h = Math.max(260, this.stageEl.clientHeight || 460);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -479,12 +503,12 @@ class Match3DEngine {
     }
 
     this.isSoftwareGl = detectSoftwareGl(renderer);
-    renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
-
+    const pr = this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+    renderer.setPixelRatio(pr);
     renderer.setSize(w, h, false);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.06;
+    renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = !this.isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer = renderer;
@@ -503,15 +527,17 @@ class Match3DEngine {
     const scene = new THREE.Scene();
     this.scene = scene;
 
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    const room = new RoomEnvironment();
-    this.pmremEnv = pmrem.fromScene(room, 0.04);
-    scene.environment = this.pmremEnv.texture;
-    room.dispose();
-    pmrem.dispose();
+    const maxAniso = Math.min(16, renderer.capabilities.getMaxAnisotropy() || 1);
+    const atmo = resolveAtmosphere(m);
+    const kits = resolveMatchKits(m.fixture.homeColors, m.fixture.awayColors);
 
-    const camera = new THREE.PerspectiveCamera(42, w / h, 0.5, 420);
-    camera.position.set(0, 34, 52);
+    // Custom HDR Stadium Sky + Floodlights + Pitch Environment Map
+    this.pmremEnv = createStadiumEnvironmentTexture(renderer, atmo);
+    scene.environment = this.pmremEnv.texture;
+
+    // Telephoto Broadcast Lens (31 deg FOV gives true TV sports broadcast scale & depth)
+    const camera = new THREE.PerspectiveCamera(31, w / h, 0.5, 450);
+    camera.position.set(0, 34, 62);
     this.camera = camera;
 
     const controls = new OrbitControls(camera, this.canvasEl);
@@ -519,16 +545,12 @@ class Match3DEngine {
     controls.dampingFactor = 0.07;
     controls.maxPolarAngle = Math.PI * 0.46;
     controls.minDistance = 12;
-    controls.maxDistance = 128;
+    controls.maxDistance = 138;
     controls.enabled = false;
     controls.addEventListener('start', () => {
       this.userCameraOverride = true;
     });
     this.controls = controls;
-
-    const maxAniso = Math.min(8, renderer.capabilities.getMaxAnisotropy() || 1);
-    const atmo = resolveAtmosphere(m);
-    const kits = resolveMatchKits(m.fixture.homeColors, m.fixture.awayColors);
 
     this.stadium = buildStadiumAndAtmosphere(scene, m, atmo, maxAniso, this.isSoftwareGl, kits.homeJersey, kits.awayJersey);
     this.players = buildPlayersManager(scene, this.slots, kits, this.isSoftwareGl, atmo.tempC <= 4 || atmo.season === 'winter');
@@ -537,23 +559,67 @@ class Match3DEngine {
     this.physics = new MatchPhysicsWorld(atmo.weather, {
       onKickImpact: (strength) => {
         this.audio.playKick(strength);
+        if (this.physics && strength > 0.65) {
+          const bp = this.physics.ballPos;
+          const bv = this.physics.ballVel;
+          const spd = Math.hypot(bv.x, bv.z);
+          this.stadium?.triggerTurfSpray(bp.x, bp.z, bv.x / Math.max(1, spd), bv.z / Math.max(1, spd), strength);
+          if (spd > 15) {
+            this.shotSpeedKmh = Math.round(spd * 3.6);
+            this.shotSpeedTimer = 2.6;
+          }
+        }
       },
       onPostHit: (side) => {
         this.audio.playPostPing();
-        this.stadium?.triggerGoalNet(side, 0.7);
-        this.camShake = Math.max(this.camShake, 0.45);
+        this.stadium?.triggerGoalNet(side, 0.75);
+        this.camShake = Math.max(this.camShake, 0.52);
       },
       onNetHit: (side) => {
-        this.stadium?.triggerGoalNet(side, 1.45);
-        this.camShake = Math.max(this.camShake, 0.35);
+        this.stadium?.triggerGoalNet(side, 1.5);
+        this.camShake = Math.max(this.camShake, 0.38);
       },
       onSaveDeflect: () => {
         this.audio.playKick(0.85);
-        this.camShake = Math.max(this.camShake, 0.25);
+        this.camShake = Math.max(this.camShake, 0.28);
       },
     });
 
+    // HDR MSAA EffectComposer (UnrealBloom + DLSS-CAS Sharpening + OutputPass) on GPU
     if (!this.isSoftwareGl) {
+      const rt = new THREE.WebGLRenderTarget(Math.round(w * pr), Math.round(h * pr), {
+        type: THREE.HalfFloatType,
+        samples: 4,
+      });
+      this.composerRt = rt;
+      const composer = new EffectComposer(renderer, rt);
+      composer.setPixelRatio(pr);
+      composer.setSize(w, h);
+
+      const renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+
+      const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(w, h),
+        atmo.isNight ? 0.38 : atmo.isSunset ? 0.30 : 0.20,
+        0.55,
+        0.86
+      );
+      this.bloomPass = bloomPass;
+      composer.addPass(bloomPass);
+
+      const casPass = new ShaderPass(BroadcastCasVignetteShader);
+      casPass.uniforms.uResolution.value.set(w * pr, h * pr);
+      casPass.uniforms.uSharpness.value = 0.78;
+      casPass.uniforms.uVignette.value = 0.26;
+      casPass.uniforms.uContrast.value = 1.05;
+      this.casPass = casPass;
+      composer.addPass(casPass);
+
+      const outputPass = new OutputPass();
+      composer.addPass(outputPass);
+      this.composer = composer;
+
       renderer.compile(scene, camera);
     }
 
@@ -564,6 +630,12 @@ class Match3DEngine {
       this.camera.aspect = rw / rh;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(rw, rh, false);
+      if (this.composer && !this.isSoftwareGl) {
+        const curPr = this.renderer.getPixelRatio();
+        this.composer.setSize(rw, rh);
+        this.bloomPass?.setSize(rw, rh);
+        this.casPass?.uniforms.uResolution.value.set(rw * curPr, rh * curPr);
+      }
     });
     this.resizeObs.observe(this.stageEl);
   }
@@ -654,7 +726,6 @@ class Match3DEngine {
 
     this.applySubAndCardVisibility();
 
-    // Segment transition triggers (audio, referee cards, goal confetti, kick windup)
     if (activeSeg.id !== this.lastTriggeredSegId) {
       this.lastTriggeredSegId = activeSeg.id;
       this.syncHudImmediate();
@@ -679,19 +750,20 @@ class Match3DEngine {
         this.stadium.triggerConfetti(activeSeg.goalSide, col);
         this.audio.swellCrowd('goal');
         this.goalMood = 1.0;
-        this.goalBannerTimer = 3.6;
+        this.goalBannerTimer = 3.8;
+        this.actionCamTimer = 3.1;
         this.goalBannerTeam = activeSeg.team === 'away'
           ? (this.payload?.fixture.awayName || 'Гости')
           : (this.payload?.fixture.homeName || 'Хозяева');
         for (const aid of activeSeg.actorIds) {
           const r = this.players.rigs.get(aid);
-          if (r) r.celebrateTimer = 3.2;
+          if (r) r.celebrateTimer = 3.4;
         }
       } else if (activeSeg.isPost || activeSeg.isSave || activeSeg.type === 'shot') {
         this.audio.swellCrowd('chance');
+        this.actionCamTimer = 1.6;
       }
 
-      // Kick / Tackle / Dive pose synchronization
       const primaryRig = activeSeg.actorIds[0] ? this.players.rigs.get(activeSeg.actorIds[0]) : undefined;
       if (primaryRig && !activeSeg.isCard && !activeSeg.isHalftime && !activeSeg.isFulltime && !activeSeg.subPair) {
         primaryRig.kickDuration = 0.56;
@@ -699,6 +771,7 @@ class Match3DEngine {
       }
       if (activeSeg.type === 'tackle' && primaryRig) {
         primaryRig.tackleTimer = 0.65;
+        this.stadium.triggerTurfSpray(primaryRig.curX, primaryRig.curZ, Math.sin(primaryRig.facing), Math.cos(primaryRig.facing), 1.1);
       }
       if (activeSeg.isSave || activeSeg.isGoal) {
         const defSide = activeSeg.team === 'home' ? 'away' : 'home';
@@ -711,7 +784,6 @@ class Match3DEngine {
       }
     }
 
-    // Advance sub-stepped Newtonian ball physics
     const physDt = this.playing ? dt * Math.min(2.2, this.speed) : 0;
     if (physDt > 0) {
       this.physics.step(physDt, activeSeg, this.playSec - activeSeg.playStartSec);
@@ -720,7 +792,6 @@ class Match3DEngine {
     const ballPos = this.physics.ballPos;
     const ballVel = this.physics.ballVel;
 
-    // Tactical formation steering targets
     const secondHalf = this.simMatchSec >= 45 * 60;
     const shiftX = ballPos.x * 0.34;
     const shiftZ = ballPos.z * 0.24;
@@ -761,7 +832,6 @@ class Match3DEngine {
       if (activeSeg.type === 'dribble') {
         this.slotTargetMap.set(p0Id, [ballPos.x - Math.sign(ballVel.x || 1) * 0.45, ballPos.z]);
       } else {
-        // Kicker steps right behind the ball before kick, then holds follow-through position
         const kickDirX = Math.sign(activeSeg.ballEnd[0] - activeSeg.ballStart[0] || 1);
         this.slotTargetMap.set(p0Id, [activeSeg.ballStart[0] - kickDirX * 0.55, activeSeg.ballStart[2]]);
       }
@@ -769,7 +839,6 @@ class Match3DEngine {
     if (p1Id && !activeSeg.isHalftime && !activeSeg.isFulltime && !activeSeg.subPair) {
       const p1Rig = this.players.rigs.get(p1Id);
       if (p1Rig && !p1Rig.slot.isGk) {
-        // Receiver anticipates pass arrival spot cleanly
         const lead = THREE.MathUtils.clamp(fracPlay * 1.15, 0, 1);
         const rx = THREE.MathUtils.lerp(p1Rig.curX, activeSeg.ballEnd[0], 0.35 + lead * 0.65);
         const rz = THREE.MathUtils.lerp(p1Rig.curZ, activeSeg.ballEnd[2] + (activeSeg.type === 'duel' ? 0.9 : 0), 0.35 + lead * 0.65);
@@ -777,7 +846,6 @@ class Match3DEngine {
       }
     }
 
-    // Referee smart positioning
     if (activeSeg.isCard && p0Id && this.players.rigs.get(p0Id)) {
       const cardRig = this.players.rigs.get(p0Id)!;
       this.refTarget[0] = cardRig.curX + 1.8;
@@ -804,6 +872,18 @@ class Match3DEngine {
     this.players.animateRigs(dt, this.elapsedReal, p0Id || null, ballPos);
 
     this.goalMood = Math.max(0, this.goalMood - dt * 0.38);
+    if (this.actionCamTimer > 0) this.actionCamTimer = Math.max(0, this.actionCamTimer - dt);
+
+    if (this.shotBadgeEl) {
+      if (this.shotSpeedTimer > 0) {
+        this.shotSpeedTimer = Math.max(0, this.shotSpeedTimer - dt);
+        this.shotBadgeEl.style.display = 'inline-block';
+        this.shotBadgeEl.textContent = `⚡ УДАР ${this.shotSpeedKmh} км/ч`;
+      } else {
+        this.shotBadgeEl.style.display = 'none';
+      }
+    }
+
     if (this.goalFlashEl) {
       if (this.goalBannerTimer > 0) {
         this.goalBannerTimer = Math.max(0, this.goalBannerTimer - dt);
@@ -834,10 +914,9 @@ class Match3DEngine {
       return;
     }
 
-    // Low-pass filter focal point so camera pans smoothly like a broadcast jib operator
-    this.camFocus.x = THREE.MathUtils.damp(this.camFocus.x, ballPos.x, 4.2, dt);
-    this.camFocus.y = THREE.MathUtils.damp(this.camFocus.y, ballPos.y, 4.2, dt);
-    this.camFocus.z = THREE.MathUtils.damp(this.camFocus.z, ballPos.z, 4.2, dt);
+    this.camFocus.x = THREE.MathUtils.damp(this.camFocus.x, ballPos.x, 4.4, dt);
+    this.camFocus.y = THREE.MathUtils.damp(this.camFocus.y, ballPos.y, 4.4, dt);
+    this.camFocus.z = THREE.MathUtils.damp(this.camFocus.z, ballPos.z, 4.4, dt);
 
     const bx = this.camFocus.x;
     const bz = this.camFocus.z;
@@ -849,18 +928,25 @@ class Match3DEngine {
     const shakeY = this.camShake > 0 ? Math.cos(this.elapsedReal * 47) * this.camShake * 0.25 : 0;
 
     if (this.cameraMode === 'tv') {
-      const boxFocus = Math.abs(bx) > 30 ? 0.74 : 1.0;
-      this.camDesiredTarget.set(bx * 0.68, 0.9, bz * 0.45);
-      this.camDesiredPos.set(bx * 0.52 + shakeX, 30 * boxFocus + 6 + shakeY, 45 * boxFocus + bz * 0.22);
-      this.camTarget.x = THREE.MathUtils.damp(this.camTarget.x, this.camDesiredTarget.x, 4.6, dt);
-      this.camTarget.y = THREE.MathUtils.damp(this.camTarget.y, this.camDesiredTarget.y, 4.6, dt);
-      this.camTarget.z = THREE.MathUtils.damp(this.camTarget.z, this.camDesiredTarget.z, 4.6, dt);
-      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.2, dt);
-      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.2, dt);
-      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 4.2, dt);
+      // Dynamic Broadcast Director: telephoto pitchside close-up on goals/chances, then smooth return to gantry
+      if (this.actionCamTimer > 0 && Math.abs(bx) > 20) {
+        const sideSign = bz >= 0 ? -1 : 1;
+        this.camDesiredTarget.set(bx * 0.92, 1.15, bz * 0.72);
+        this.camDesiredPos.set(bx * 0.72 + shakeX, 9.5 + shakeY, sideSign * 26);
+      } else {
+        const boxFocus = Math.abs(bx) > 30 ? 0.78 : 1.0;
+        this.camDesiredTarget.set(bx * 0.72, 0.95, bz * 0.46);
+        this.camDesiredPos.set(bx * 0.45 + shakeX, 34 * boxFocus + 4 + shakeY, 62 * boxFocus + bz * 0.2);
+      }
+      this.camTarget.x = THREE.MathUtils.damp(this.camTarget.x, this.camDesiredTarget.x, 4.4, dt);
+      this.camTarget.y = THREE.MathUtils.damp(this.camTarget.y, this.camDesiredTarget.y, 4.4, dt);
+      this.camTarget.z = THREE.MathUtils.damp(this.camTarget.z, this.camDesiredTarget.z, 4.4, dt);
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 3.8, dt);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 3.8, dt);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 3.8, dt);
       this.camera.lookAt(this.camTarget);
     } else if (this.cameraMode === 'tactical') {
-      this.camDesiredPos.set(bx * 0.22, 64, 42);
+      this.camDesiredPos.set(bx * 0.22, 82, 54);
       this.camDesiredTarget.set(bx * 0.25, 0, bz * 0.2);
       this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.0, dt);
       this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.0, dt);
@@ -871,9 +957,9 @@ class Match3DEngine {
       this.camera.lookAt(this.camTarget);
     } else if (this.cameraMode === 'goal') {
       const atkRight = activeSeg.ballEnd[0] >= 0;
-      const gCamX = atkRight ? 61 : -61;
-      this.camDesiredPos.set(gCamX + shakeX, 11.5 + shakeY, bz * 0.35);
-      this.camDesiredTarget.set(bx * 0.7, 1.2, bz * 0.5);
+      const gCamX = atkRight ? 68 : -68;
+      this.camDesiredPos.set(gCamX + shakeX, 12.5 + shakeY, bz * 0.35);
+      this.camDesiredTarget.set(bx * 0.72, 1.2, bz * 0.5);
       this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, this.camDesiredPos.x, 4.5, dt);
       this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, this.camDesiredPos.y, 4.5, dt);
       this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, this.camDesiredPos.z, 4.5, dt);
@@ -922,7 +1008,11 @@ class Match3DEngine {
       if (!this.hiddenPaused && !this.contextLost && this.renderer && this.scene && this.camera) {
         this.elapsedReal += dt;
         this.stepSimulation(dt);
-        this.renderer.render(this.scene, this.camera);
+        if (!this.isSoftwareGl && this.rtxEnabled && this.composer) {
+          this.composer.render();
+        } else {
+          this.renderer.render(this.scene, this.camera);
+        }
       }
 
       if (this.isSoftwareGl) afterDraw(tick);
@@ -954,6 +1044,12 @@ class Match3DEngine {
     this.physics = null;
     this.controls?.dispose();
     this.controls = null;
+    this.composer?.dispose();
+    this.composer = null;
+    this.composerRt?.dispose();
+    this.composerRt = null;
+    this.bloomPass = null;
+    this.casPass = null;
     this.pmremEnv?.dispose();
     this.pmremEnv = null;
 
